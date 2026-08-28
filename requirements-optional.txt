@@ -1,0 +1,16 @@
+# Funzioni opzionali — il codice degrada con grazia se mancano.
+# Installa con:  ./.venv/bin/pip install -r requirements-optional.txt
+#
+#   - Calendario CalDAV (Fase 2): caldav, icalendar
+#   - Ricerca vettoriale più veloce (Fase 3): numpy
+#       senza numpy la memoria semantica usa un fallback in puro Python
+#   - Email via IMAP/SMTP (Fase 4): usa la libreria standard, nessuna dipendenza
+#   - Messaggi Matrix / WhatsApp (Fase 5): matrix-nio
+#   - Camera lato server headless: opencv-python
+#       di norma non serve, la webcam arriva dal browser
+
+caldav>=1.3
+icalendar>=5.0
+numpy>=1.26
+matrix-nio>=0.24
+# opencv-python>=4.9

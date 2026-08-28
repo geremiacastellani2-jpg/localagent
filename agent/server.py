@@ -23,6 +23,14 @@ app = FastAPI(title="Maggiordomo Locale", version="0.1.0")
 agent = Agent()
 
 
+@app.on_event("startup")
+def _startup() -> None:
+    # avvia il bridge Matrix in background se configurato (altrimenti no-op)
+    from .matrix_client import bridge
+
+    bridge.start()
+
+
 class ChatIn(BaseModel):
     session: str = "default"
     message: str

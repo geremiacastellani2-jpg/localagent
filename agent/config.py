@@ -61,6 +61,21 @@ class Settings:
     # nome del calendario da usare (vuoto = il primo/predefinito)
     caldav_calendar: str = field(default_factory=lambda: os.getenv("CALDAV_CALENDAR", ""))
 
+    # --- Email (IMAP/SMTP) — Fase 4 ---
+    email_address: str = field(default_factory=lambda: os.getenv("EMAIL_ADDRESS", ""))
+    email_password: str = field(default_factory=lambda: os.getenv("EMAIL_PASSWORD", ""))
+    imap_host: str = field(default_factory=lambda: os.getenv("IMAP_HOST", "imap.gmail.com"))
+    imap_port: int = field(default_factory=lambda: int(os.getenv("IMAP_PORT", "993")))
+    smtp_host: str = field(default_factory=lambda: os.getenv("SMTP_HOST", "smtp.gmail.com"))
+    smtp_port: int = field(default_factory=lambda: int(os.getenv("SMTP_PORT", "587")))
+
+    # --- Messaggi: Matrix (bridge WhatsApp/SMS/iMessage) — Fase 5 ---
+    matrix_homeserver: str = field(default_factory=lambda: os.getenv("MATRIX_HOMESERVER", ""))
+    matrix_user: str = field(default_factory=lambda: os.getenv("MATRIX_USER", ""))
+    matrix_token: str = field(default_factory=lambda: os.getenv("MATRIX_TOKEN", ""))
+    matrix_password: str = field(default_factory=lambda: os.getenv("MATRIX_PASSWORD", ""))
+    matrix_device_id: str = field(default_factory=lambda: os.getenv("MATRIX_DEVICE_ID", "MAGGIORDOMO"))
+
     # --- Storage ---
     db_path: Path = field(default_factory=lambda: Path(os.getenv("DB_PATH", str(DATA_DIR / "maggiordomo.db"))))
 
@@ -79,6 +94,12 @@ class Settings:
 
     def caldav_configured(self) -> bool:
         return bool(self.caldav_url and self.caldav_username and self.caldav_password)
+
+    def email_configured(self) -> bool:
+        return bool(self.email_address and self.email_password and self.imap_host and self.smtp_host)
+
+    def matrix_configured(self) -> bool:
+        return bool(self.matrix_homeserver and self.matrix_user and (self.matrix_token or self.matrix_password))
 
     def ollama_native_base(self) -> str:
         """L'URL base dell'API nativa di Ollama (senza il suffisso /v1)."""

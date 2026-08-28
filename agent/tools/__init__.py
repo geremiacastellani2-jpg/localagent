@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from .base import Registry
-from . import calendar, clock, memory, notes, reminders, vision
+from . import approvals, calendar, clock, email, memory, messages, notes, reminders, vision
 
 
 def build_registry() -> Registry:
     reg = Registry()
-    for module in (notes, reminders, memory, calendar, vision, clock):
+    modules = (notes, reminders, memory, calendar, email, messages, approvals, vision, clock)
+    for module in modules:
         for tool in module.TOOLS:
             reg.register(tool)
     return reg

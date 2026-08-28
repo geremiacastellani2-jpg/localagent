@@ -1,19 +1,9 @@
-# Nucleo — chat, agente, server
+# Nucleo — solo dipendenze con wheel universali, si installa ovunque.
+# (uvicorn "liscio", senza gli extra [standard] che tirano dentro uvloop/httptools
+#  e possono non avere wheel sulle versioni di Python più recenti.)
 fastapi>=0.111
-uvicorn[standard]>=0.30
+uvicorn>=0.30
 openai>=1.40
 httpx>=0.27
 python-dotenv>=1.0
 pydantic>=2.7
-
-# Calendario — sincronizzazione CalDAV (iCloud/Google/Fastmail/Radicale)
-# Il calendario funziona anche solo in locale senza queste; servono per la sync.
-caldav>=1.3
-icalendar>=5.0
-
-# Memoria semantica — ricerca vettoriale (coseno) sugli embedding
-numpy>=1.26
-
-# Camera lato server (fallback headless): opzionale, serve solo se NON usi la
-# webcam dal browser. Sul Mac installala con:  pip install opencv-python
-# opencv-python>=4.9

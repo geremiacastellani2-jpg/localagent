@@ -1,0 +1,27 @@
+# Homeserver Matrix (Synapse) + bridge WhatsApp (mautrix) per il Maggiordomo.
+# Gira sul Mac. Vedi ../../docs/whatsapp.md per la procedura completa.
+#
+# Avvio rapido (dopo aver generato le config come da guida):
+#   cd deploy/matrix && docker compose up -d
+
+services:
+  synapse:
+    image: matrixdotorg/synapse:latest
+    container_name: maggiordomo-synapse
+    environment:
+      SYNAPSE_SERVER_NAME: localhost
+      SYNAPSE_REPORT_STATS: "no"
+    volumes:
+      - ./synapse:/data
+    ports:
+      - "8008:8008"          # l'agente vi si collega su http://localhost:8008
+    restart: unless-stopped
+
+  mautrix-whatsapp:
+    image: dock.mau.dev/mautrix/whatsapp:latest
+    container_name: maggiordomo-whatsapp
+    depends_on:
+      - synapse
+    volumes:
+      - ./whatsapp:/data
+    restart: unless-stopped

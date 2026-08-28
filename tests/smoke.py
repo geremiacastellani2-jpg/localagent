@@ -87,13 +87,36 @@ deleted = _delete_event({"id": 1}, {})
 check("evento eliminato", "Eliminato" in deleted)
 check("CalDAV non configurato in test", not caldav_sync.available())
 
+# coda di approvazioni (outbox) con un dispatcher finto
+from agent import outbox  # noqa: E402
+
+_sent = {}
+outbox.register("test.send", lambda p: (_sent.update(p) or "inviato"))
+aid = outbox.enqueue("test.send", "prova", {"x": 1})
+check("azione in coda", any(a["id"] == aid for a in outbox.list_pending()))
+check("azione approvata ed eseguita", "eseguita" in outbox.approve(aid) and _sent.get("x") == 1)
+check("azione non più pendente", not any(a["id"] == aid for a in outbox.list_pending()))
+aid2 = outbox.enqueue("test.send", "prova2", {"y": 2})
+check("reject annulla", "annullata" in outbox.reject(aid2))
+
+# email/messaggi non configurati: le guardie rispondono senza crashare
+from agent.tools.email import _send_email  # noqa: E402
+from agent.tools.messages import _list_chats  # noqa: E402
+
+check("send_email guardato senza config", "non configurata" in _send_email({"to": "a@b.it", "body": "ciao"}, {}).lower())
+_chats = _list_chats({}, {}).lower()
+check("messaggi guardati senza config", any(s in _chats for s in ("non installato", "non configurato", "non attivi")))
+
 # registro
 reg = build_registry()
 names = {t["function"]["name"] for t in reg.schemas()}
 expected = {"add_note", "list_notes", "delete_note", "add_reminder", "list_reminders",
             "complete_reminder", "remember_fact", "recall", "forget_fact", "reindex_memory",
             "look", "current_view", "get_current_time",
-            "add_event", "list_events", "upcoming_events", "move_event", "delete_event", "sync_calendar"}
+            "add_event", "list_events", "upcoming_events", "move_event", "delete_event", "sync_calendar",
+            "list_emails", "read_email", "send_email",
+            "list_chats", "read_chat", "send_message",
+            "list_pending_actions", "approve_action", "reject_action"}
 check("tutti gli strumenti registrati", expected <= names)
 
 # registro: strumento sconosciuto non esplode

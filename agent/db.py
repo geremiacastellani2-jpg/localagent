@@ -60,6 +60,17 @@ CREATE TABLE IF NOT EXISTS memory_vectors (
     created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
 CREATE INDEX IF NOT EXISTS idx_vectors_ref ON memory_vectors(kind, ref_id);
+
+CREATE TABLE IF NOT EXISTS pending_actions (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind       TEXT NOT NULL,               -- 'email.send', 'matrix.send', ...
+    summary    TEXT NOT NULL,               -- riga leggibile mostrata all'utente
+    payload    TEXT NOT NULL,               -- JSON con i dettagli dell'azione
+    status     TEXT NOT NULL DEFAULT 'pending',  -- pending | done | failed | rejected
+    result     TEXT DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_pending_status ON pending_actions(status);
 """
 
 
