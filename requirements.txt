@@ -1,0 +1,10 @@
+# Nucleo — chat, agente, server
+fastapi>=0.111
+uvicorn[standard]>=0.30
+openai>=1.40
+python-dotenv>=1.0
+pydantic>=2.7
+
+# Camera lato server (fallback headless): opzionale, serve solo se NON usi la
+# webcam dal browser. Sul Mac installala con:  pip install opencv-python
+# opencv-python>=4.9

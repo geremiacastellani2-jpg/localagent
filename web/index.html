@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Maggiordomo Locale</title>
+<style>
+  :root{
+    --bg:#f5f7f4; --surface:#ffffff; --surface-2:#eef1ec; --ink:#16211f;
+    --muted:#5b6a65; --border:#d7ddd4; --accent:#0d7b6a; --accent-strong:#0a5e51;
+    --accent-tint:#e2f1ee; --warn:#a9631a;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --bg:#0c1214; --surface:#121a1c; --surface-2:#16211f; --ink:#e8efeb;
+      --muted:#93a29d; --border:#263133; --accent:#35c9ac; --accent-strong:#57d7bd;
+      --accent-tint:#123029; --warn:#e0a24a;
+    }
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    display:flex; flex-direction:column;
+  }
+  header{
+    display:flex; align-items:center; gap:.75rem; padding:.8rem 1.1rem;
+    border-bottom:1px solid var(--border); background:var(--surface);
+  }
+  header .dot{width:10px;height:10px;border-radius:50%;background:var(--accent)}
+  header h1{font-size:1rem;margin:0;font-weight:650;letter-spacing:-.01em}
+  header .status{
+    margin-left:auto; font:500 .72rem ui-monospace,SFMono-Regular,Menlo,monospace;
+    color:var(--muted); background:var(--surface-2); border:1px solid var(--border);
+    padding:.25rem .55rem; border-radius:999px;
+  }
+  header button.reset{
+    background:none;border:1px solid var(--border);color:var(--muted);
+    border-radius:8px;padding:.3rem .55rem;font-size:.75rem;cursor:pointer;
+  }
+  main{flex:1; overflow-y:auto; padding:1.2rem clamp(.8rem,4vw,2rem)}
+  .thread{max-width:760px;margin:0 auto;display:flex;flex-direction:column;gap:.7rem}
+  .msg{padding:.7rem .95rem;border-radius:14px;line-height:1.5;white-space:pre-wrap;
+    max-width:82%;font-size:.97rem;overflow-wrap:anywhere}
+  .msg.user{align-self:flex-end;background:var(--accent-tint);border:1px solid var(--accent);
+    color:var(--ink);border-bottom-right-radius:5px}
+  .msg.bot{align-self:flex-start;background:var(--surface);border:1px solid var(--border);
+    border-bottom-left-radius:5px}
+  .msg.bot.thinking{color:var(--muted);font-style:italic}
+  .msg .img{display:block;margin-top:.5rem;border-radius:8px;max-width:180px;border:1px solid var(--border)}
+  .hint{max-width:760px;margin:0 auto 1rem;color:var(--muted);font-size:.85rem;text-align:center}
+
+  footer{border-top:1px solid var(--border);background:var(--surface);padding:.7rem clamp(.8rem,4vw,2rem)}
+  .composer{max-width:760px;margin:0 auto;display:flex;flex-direction:column;gap:.55rem}
+  .cam{display:none;align-items:center;gap:.7rem}
+  .cam.on{display:flex}
+  .cam video{width:132px;height:99px;object-fit:cover;border-radius:10px;border:1px solid var(--border);background:#000;transform:scaleX(-1)}
+  .cam .caminfo{font-size:.8rem;color:var(--muted)}
+  .row{display:flex;gap:.5rem;align-items:flex-end}
+  textarea{
+    flex:1;resize:none;min-height:44px;max-height:160px;padding:.7rem .8rem;
+    border:1px solid var(--border);border-radius:12px;background:var(--surface);color:var(--ink);
+    font:inherit;font-size:.97rem;line-height:1.4;
+  }
+  textarea:focus{outline:2px solid var(--accent);outline-offset:0}
+  button.icon{
+    border:1px solid var(--border);background:var(--surface);color:var(--ink);
+    border-radius:12px;height:44px;min-width:44px;font-size:1.1rem;cursor:pointer;
+  }
+  button.icon.active{background:var(--accent-tint);border-color:var(--accent)}
+  button.send{
+    border:none;background:var(--accent);color:#fff;border-radius:12px;height:44px;
+    padding:0 1.1rem;font-weight:650;cursor:pointer;font-size:.95rem;
+  }
+  button:disabled{opacity:.5;cursor:not-allowed}
+  @media (prefers-color-scheme:dark){button.send{color:#06231d}}
+</style>
+</head>
+<body>
+  <header>
+    <span class="dot"></span>
+    <h1>Maggiordomo</h1>
+    <span class="status" id="status">connessione…</span>
+    <button class="reset" id="reset" title="Nuova conversazione">azzera</button>
+  </header>
+
+  <main>
+    <div class="hint" id="hint">Parlagli in italiano. Attiva la camera con 📷 e chiedi «cosa vedi?».</div>
+    <div class="thread" id="thread"></div>
+  </main>
+
+  <footer>
+    <div class="composer">
+      <div class="cam" id="cam">
+        <video id="video" autoplay muted playsinline></video>
+        <span class="caminfo">Camera attiva — l'agente può vedere quando glielo chiedi.</span>
+      </div>
+      <div class="row">
+        <button class="icon" id="camBtn" title="Attiva/disattiva camera">📷</button>
+        <button class="icon" id="eyeBtn" title="Cosa vedi?" disabled>👁️</button>
+        <textarea id="input" placeholder="Scrivi un messaggio…" rows="1"></textarea>
+        <button class="send" id="send">Invia</button>
+      </div>
+    </div>
+  </footer>
+
+<script>
+const SESSION = "default";
+const thread = document.getElementById("thread");
+const input = document.getElementById("input");
+const sendBtn = document.getElementById("send");
+const camBtn = document.getElementById("camBtn");
+const eyeBtn = document.getElementById("eyeBtn");
+const cam = document.getElementById("cam");
+const video = document.getElementById("video");
+const statusEl = document.getElementById("status");
+
+let stream = null;
+
+async function loadStatus(){
+  try{
+    const r = await fetch("/health");
+    const j = await r.json();
+    statusEl.textContent = `${j.tier} · ${j.model}`;
+  }catch{ statusEl.textContent = "offline"; }
+}
+loadStatus();
+
+function addMsg(role, text, imgDataUrl){
+  const el = document.createElement("div");
+  el.className = "msg " + (role === "user" ? "user" : "bot");
+  el.textContent = text;
+  if(imgDataUrl){
+    const img = document.createElement("img");
+    img.className = "img"; img.src = imgDataUrl;
+    el.appendChild(img);
+  }
+  thread.appendChild(el);
+  el.scrollIntoView({behavior:"smooth", block:"end"});
+  return el;
+}
+
+function captureFrame(){
+  if(!stream || video.videoWidth === 0) return null;
+  const maxW = 640;
+  const scale = Math.min(1, maxW / video.videoWidth);
+  const c = document.createElement("canvas");
+  c.width = Math.round(video.videoWidth * scale);
+  c.height = Math.round(video.videoHeight * scale);
+  c.getContext("2d").drawImage(video, 0, 0, c.width, c.height);
+  return c.toDataURL("image/jpeg", 0.7);
+}
+
+async function toggleCam(){
+  if(stream){
+    stream.getTracks().forEach(t => t.stop());
+    stream = null; cam.classList.remove("on");
+    camBtn.classList.remove("active"); eyeBtn.disabled = true;
+    return;
+  }
+  try{
+    stream = await navigator.mediaDevices.getUserMedia({video:true});
+    video.srcObject = stream; cam.classList.add("on");
+    camBtn.classList.add("active"); eyeBtn.disabled = false;
+  }catch(e){
+    addMsg("bot", "Non riesco ad accedere alla camera: " + e.message);
+  }
+}
+
+async function send(text){
+  const message = (text ?? input.value).trim();
+  if(!message) return;
+  const frame = captureFrame();
+  addMsg("user", message, frame);
+  input.value = ""; input.style.height = "auto";
+  sendBtn.disabled = true;
+  const thinking = addMsg("bot", "sta pensando…");
+  thinking.classList.add("thinking");
+  try{
+    const r = await fetch("/chat", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({session:SESSION, message, frame})
+    });
+    const j = await r.json();
+    thinking.classList.remove("thinking");
+    thinking.textContent = j.reply || "(nessuna risposta)";
+  }catch(e){
+    thinking.classList.remove("thinking");
+    thinking.textContent = "Errore di rete: " + e.message;
+  }finally{
+    sendBtn.disabled = false;
+    input.focus();
+  }
+}
+
+sendBtn.addEventListener("click", () => send());
+eyeBtn.addEventListener("click", () => send("Cosa vedi in questo momento?"));
+camBtn.addEventListener("click", toggleCam);
+input.addEventListener("keydown", e => {
+  if(e.key === "Enter" && !e.shiftKey){ e.preventDefault(); send(); }
+});
+input.addEventListener("input", () => {
+  input.style.height = "auto";
+  input.style.height = Math.min(160, input.scrollHeight) + "px";
+});
+document.getElementById("reset").addEventListener("click", async () => {
+  await fetch("/reset?session=" + SESSION, {method:"POST"});
+  thread.innerHTML = "";
+});
+</script>
+</body>
+</html>

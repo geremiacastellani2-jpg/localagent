@@ -1,0 +1,19 @@
+# Segreti e ambiente
+.env
+.venv/
+venv/
+
+# Dati locali (DB, WAL) — non vanno mai versionati
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# macOS
+.DS_Store
