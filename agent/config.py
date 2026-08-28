@@ -45,6 +45,8 @@ class Settings:
     ollama_base_url: str = field(default_factory=lambda: os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1"))
     local_model: str = field(default_factory=lambda: os.getenv("LOCAL_MODEL", "qwen2.5"))
     local_vision_model: str = field(default_factory=lambda: os.getenv("LOCAL_VISION_MODEL", "llama3.2-vision"))
+    # modello di embedding locale per la memoria semantica (Fase 3)
+    embed_model: str = field(default_factory=lambda: os.getenv("EMBED_MODEL", "nomic-embed-text"))
 
     # --- Routing ---
     # tier di default per la chat: "cloud", "local" oppure "auto"
@@ -77,6 +79,13 @@ class Settings:
 
     def caldav_configured(self) -> bool:
         return bool(self.caldav_url and self.caldav_username and self.caldav_password)
+
+    def ollama_native_base(self) -> str:
+        """L'URL base dell'API nativa di Ollama (senza il suffisso /v1)."""
+        host = self.ollama_base_url.rstrip("/")
+        if host.endswith("/v1"):
+            host = host[:-3].rstrip("/")
+        return host
 
 
 settings = Settings()

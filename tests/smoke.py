@@ -37,13 +37,34 @@ print(_add_note({"text": "comprare il latte", "tags": "casa"}, {}))
 listing = _list_notes({}, {})
 check("nota presente nell'elenco", "comprare il latte" in listing)
 
+# memoria semantica: inietta un embedder finto e deterministico (niente Ollama)
+from agent import semantic_memory as sem  # noqa: E402
+
+
+def _fake_embed(text: str):
+    # vettore bag-of-words su un piccolo vocabolario: sufficiente per testare
+    # indicizzazione, coseno e ordinamento.
+    vocab = ["caffè", "amaro", "latte", "gatto", "milano", "utente", "beve", "vive"]
+    t = text.lower()
+    return [float(t.count(w)) + 0.01 for w in vocab]
+
+
+sem._backend = _fake_embed  # type: ignore[attr-defined]
+check("embedder finto disponibile", sem.available())
+
 # memoria
 print(_remember({"subject": "utente", "fact": "beve caffè amaro"}, {}))
+_remember({"subject": "utente", "fact": "vive a Milano"}, {})
 recall = _recall({"query": "caffè"}, {})
-check("fatto richiamato", "caffè" in recall)
+check("richiamo semantico trova il caffè", "caffè" in recall and "Milano" not in recall.split("\n")[1])
+recall2 = _recall({"query": "dove abita"}, {})
+check("richiamo semantico attivo (sim)", "sim" in recall)
 # idempotenza
 again = _remember({"subject": "utente", "fact": "beve caffè amaro"}, {})
 check("remember idempotente", "Già in memoria" in again)
+# indice vettoriale popolato
+res = sem.search("caffè", k=2)
+check("ricerca vettoriale ordinata", res and res[0]["score"] >= res[-1]["score"])
 
 # calendario
 from agent.tools.calendar import _add_event, _list_events, _upcoming, _move_event, _delete_event  # noqa: E402
@@ -70,7 +91,8 @@ check("CalDAV non configurato in test", not caldav_sync.available())
 reg = build_registry()
 names = {t["function"]["name"] for t in reg.schemas()}
 expected = {"add_note", "list_notes", "delete_note", "add_reminder", "list_reminders",
-            "complete_reminder", "remember_fact", "recall", "forget_fact", "look", "get_current_time",
+            "complete_reminder", "remember_fact", "recall", "forget_fact", "reindex_memory",
+            "look", "current_view", "get_current_time",
             "add_event", "list_events", "upcoming_events", "move_event", "delete_event", "sync_calendar"}
 check("tutti gli strumenti registrati", expected <= names)
 

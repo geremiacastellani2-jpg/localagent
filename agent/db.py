@@ -49,6 +49,17 @@ CREATE TABLE IF NOT EXISTS events (
     created_at  TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
 CREATE INDEX IF NOT EXISTS idx_events_start ON events(start_at);
+
+CREATE TABLE IF NOT EXISTS memory_vectors (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind       TEXT NOT NULL,               -- 'fact', 'note', ...
+    ref_id     INTEGER NOT NULL DEFAULT 0,  -- id della riga sorgente (per dedup/aggiornamento)
+    text       TEXT NOT NULL,               -- testo indicizzato
+    embedding  BLOB NOT NULL,               -- vettore float32
+    dim        INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_vectors_ref ON memory_vectors(kind, ref_id);
 """
 
 

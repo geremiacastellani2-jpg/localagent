@@ -53,10 +53,18 @@
 
   footer{border-top:1px solid var(--border);background:var(--surface);padding:.7rem clamp(.8rem,4vw,2rem)}
   .composer{max-width:760px;margin:0 auto;display:flex;flex-direction:column;gap:.55rem}
-  .cam{display:none;align-items:center;gap:.7rem}
+  .cam{display:none;align-items:center;gap:.8rem}
   .cam.on{display:flex}
-  .cam video{width:132px;height:99px;object-fit:cover;border-radius:10px;border:1px solid var(--border);background:#000;transform:scaleX(-1)}
-  .cam .caminfo{font-size:.8rem;color:var(--muted)}
+  .camwrap{position:relative;width:150px;height:112px;flex:0 0 auto}
+  .camwrap video,.camwrap canvas{
+    position:absolute;inset:0;width:150px;height:112px;border-radius:10px;
+    transform:scaleX(-1);   /* specchio: video e overlay allineati */
+  }
+  .camwrap video{object-fit:cover;border:1px solid var(--border);background:#000}
+  .camwrap canvas{pointer-events:none}
+  .caminfo{font-size:.8rem;color:var(--muted);line-height:1.35}
+  .caminfo .live{color:var(--accent-strong);font-weight:600}
+  .caminfo #liveObjs{font-family:ui-monospace,Menlo,monospace;font-size:.75rem}
   .row{display:flex;gap:.5rem;align-items:flex-end}
   textarea{
     flex:1;resize:none;min-height:44px;max-height:160px;padding:.7rem .8rem;
@@ -86,15 +94,21 @@
   </header>
 
   <main>
-    <div class="hint" id="hint">Parlagli in italiano. Attiva la camera con 📷 e chiedi «cosa vedi?».</div>
+    <div class="hint" id="hint">Parlagli in italiano. Attiva la camera con 📷: vede dal vivo e riconosce gli oggetti in tempo reale.</div>
     <div class="thread" id="thread"></div>
   </main>
 
   <footer>
     <div class="composer">
       <div class="cam" id="cam">
-        <video id="video" autoplay muted playsinline></video>
-        <span class="caminfo">Camera attiva — l'agente può vedere quando glielo chiedi.</span>
+        <div class="camwrap">
+          <video id="video" autoplay muted playsinline></video>
+          <canvas id="overlay"></canvas>
+        </div>
+        <div class="caminfo">
+          <div><span class="live">● LIVE</span> — l'agente vede il momento presente.</div>
+          <div id="liveObjs">avvio riconoscimento…</div>
+        </div>
       </div>
       <div class="row">
         <button class="icon" id="camBtn" title="Attiva/disattiva camera">📷</button>
@@ -106,6 +120,9 @@
     </div>
   </footer>
 
+<!-- Rilevamento oggetti in tempo reale, nel browser (pagina locale, nessuna CSP) -->
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
 <script>
 const SESSION = "default";
 const thread = document.getElementById("thread");
@@ -115,14 +132,19 @@ const camBtn = document.getElementById("camBtn");
 const eyeBtn = document.getElementById("eyeBtn");
 const cam = document.getElementById("cam");
 const video = document.getElementById("video");
+const overlay = document.getElementById("overlay");
+const liveObjsEl = document.getElementById("liveObjs");
 const statusEl = document.getElementById("status");
 
 let stream = null;
+let detector = null;          // modello coco-ssd (caricato una volta)
+let liveObjects = [];         // etichette attualmente in vista
+let detectTimer = null;
+let streamTimer = null;
 
 async function loadStatus(){
   try{
-    const r = await fetch("/health");
-    const j = await r.json();
+    const r = await fetch("/health"); const j = await r.json();
     statusEl.textContent = `${j.tier} · ${j.model}`;
   }catch{ statusEl.textContent = "offline"; }
 }
@@ -134,8 +156,7 @@ function addMsg(role, text, imgDataUrl){
   el.textContent = text;
   if(imgDataUrl){
     const img = document.createElement("img");
-    img.className = "img"; img.src = imgDataUrl;
-    el.appendChild(img);
+    img.className = "img"; img.src = imgDataUrl; el.appendChild(img);
   }
   thread.appendChild(el);
   el.scrollIntoView({behavior:"smooth", block:"end"});
@@ -153,17 +174,71 @@ function captureFrame(){
   return c.toDataURL("image/jpeg", 0.7);
 }
 
+// --- rilevamento live ---
+async function ensureDetector(){
+  if(detector || !window.cocoSsd) return;
+  try{ liveObjsEl.textContent = "carico il modello…"; detector = await cocoSsd.load(); }
+  catch(e){ liveObjsEl.textContent = "riconoscimento non disponibile"; }
+}
+
+function drawBoxes(preds){
+  const ctx = overlay.getContext("2d");
+  overlay.width = video.videoWidth || 150;
+  overlay.height = video.videoHeight || 112;
+  ctx.clearRect(0,0,overlay.width,overlay.height);
+  ctx.lineWidth = Math.max(2, overlay.width/160);
+  ctx.strokeStyle = "#35c9ac"; ctx.fillStyle = "#35c9ac";
+  ctx.font = `${Math.max(12, overlay.width/28)}px -apple-system,sans-serif`;
+  preds.forEach(p => {
+    const [x,y,w,h] = p.bbox;
+    ctx.strokeRect(x,y,w,h);
+    ctx.fillText(p.class, x+3, y+ (y>14?-4:14));
+  });
+}
+
+async function detectLoop(){
+  if(!stream) return;
+  if(detector && video.videoWidth){
+    try{
+      const preds = (await detector.detect(video)).filter(p => p.score > 0.5);
+      liveObjects = preds.map(p => p.class);
+      drawBoxes(preds);
+      const counts = {};
+      liveObjects.forEach(o => counts[o] = (counts[o]||0)+1);
+      const listed = Object.entries(counts).map(([k,v]) => v>1?`${k}×${v}`:k).join(", ");
+      liveObjsEl.textContent = listed ? "in vista: " + listed : "nessun oggetto riconosciuto";
+    }catch{ /* ignora un frame fallito */ }
+  }
+  detectTimer = setTimeout(detectLoop, 300);
+}
+
+async function pushFrame(){
+  const frame = captureFrame();
+  if(!frame) return;
+  try{
+    await fetch("/frame", {method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({session:SESSION, frame, objects:liveObjects})});
+  }catch{ /* rete assente: riprova al prossimo giro */ }
+}
+
 async function toggleCam(){
   if(stream){
+    clearTimeout(detectTimer); clearInterval(streamTimer);
     stream.getTracks().forEach(t => t.stop());
     stream = null; cam.classList.remove("on");
     camBtn.classList.remove("active"); eyeBtn.disabled = true;
+    liveObjects = [];
+    fetch("/frame", {method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({session:SESSION, frame:null, objects:[]})});
     return;
   }
   try{
     stream = await navigator.mediaDevices.getUserMedia({video:true});
     video.srcObject = stream; cam.classList.add("on");
     camBtn.classList.add("active"); eyeBtn.disabled = false;
+    await ensureDetector();
+    detectLoop();
+    streamTimer = setInterval(pushFrame, 1200);  // feed live verso il backend
   }catch(e){
     addMsg("bot", "Non riesco ad accedere alla camera: " + e.message);
   }
@@ -181,7 +256,7 @@ async function send(text){
   try{
     const r = await fetch("/chat", {
       method:"POST", headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({session:SESSION, message, frame})
+      body: JSON.stringify({session:SESSION, message, frame, objects:liveObjects})
     });
     const j = await r.json();
     thinking.classList.remove("thinking");
@@ -190,8 +265,7 @@ async function send(text){
     thinking.classList.remove("thinking");
     thinking.textContent = "Errore di rete: " + e.message;
   }finally{
-    sendBtn.disabled = false;
-    input.focus();
+    sendBtn.disabled = false; input.focus();
   }
 }
 

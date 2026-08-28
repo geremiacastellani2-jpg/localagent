@@ -27,10 +27,17 @@ class ChatIn(BaseModel):
     session: str = "default"
     message: str
     frame: str | None = None  # data URL JPEG dalla webcam (facoltativo)
+    objects: list[str] | None = None  # oggetti live rilevati nel browser
 
 
 class ChatOut(BaseModel):
     reply: str
+
+
+class FrameIn(BaseModel):
+    session: str = "default"
+    frame: str | None = None
+    objects: list[str] | None = None
 
 
 @app.get("/")
@@ -49,10 +56,18 @@ def health() -> dict:
     }
 
 
+@app.post("/frame")
+def frame(body: FrameIn) -> dict:
+    """Feed live: la UI invia in continuo il frame corrente e gli oggetti rilevati."""
+    set_frame(body.session, body.frame, body.objects)
+    return {"ok": True}
+
+
 @app.post("/chat", response_model=ChatOut)
 def chat(body: ChatIn) -> ChatOut:
-    # memorizza l'ultimo frame per questa sessione, così lo strumento `look` lo usa
-    set_frame(body.session, body.frame)
+    # aggiorna il frame live per questa sessione, così `look`/`current_view` lo usano
+    if body.frame is not None or body.objects is not None:
+        set_frame(body.session, body.frame, body.objects)
     reply = agent.chat(body.session, body.message)
     return ChatOut(reply=reply)
 

@@ -1,14 +1,26 @@
-"""Memoria a lungo termine — livello 1: fatti strutturati.
+"""Memoria a lungo termine.
 
-Fatti espliciti, modificabili e verificabili (persone, preferenze, progetti).
-Il richiamo qui è per parola chiave; il livello 2 (embedding + vettori) arriva
-nella fase Memoria. Tenere i due livelli separati è una scelta di progetto.
+  Livello 1 (fatti):      righe esplicite in `memory_facts`, modificabili.
+  Livello 2 (semantico):  indice vettoriale in `memory_vectors` per il richiamo
+                          per significato (vedi semantic_memory.py).
+
+`remember_fact` scrive il fatto e lo indicizza. `recall` cerca prima per
+significato; se gli embedding non sono disponibili, ricade sulle parole chiave.
 """
 
 from __future__ import annotations
 
+from .. import semantic_memory as sem
+from ..config import settings
 from ..db import connect
 from .base import Tool, obj
+
+
+def _index_fact(fact_id: int, subject: str, fact: str) -> None:
+    try:
+        sem.index_text("fact", fact_id, f"{subject}: {fact}")
+    except Exception:
+        pass  # l'indicizzazione è best-effort; il fatto è comunque salvato
 
 
 def _remember(args: dict, _ctx: dict) -> str:
@@ -19,7 +31,6 @@ def _remember(args: dict, _ctx: dict) -> str:
     source = (args.get("source") or "chat").strip()
     conn = connect()
     try:
-        # se esiste già lo stesso soggetto+fatto, aggiorna il timestamp invece di duplicare
         existing = conn.execute(
             "SELECT id FROM memory_facts WHERE subject = ? AND fact = ?", (subject, fact)
         ).fetchone()
@@ -29,32 +40,32 @@ def _remember(args: dict, _ctx: dict) -> str:
                 (existing["id"],),
             )
             conn.commit()
+            _index_fact(existing["id"], subject, fact)
             return f"Già in memoria (fatto #{existing['id']}), aggiornato."
         cur = conn.execute(
             "INSERT INTO memory_facts (subject, fact, source) VALUES (?, ?, ?)",
             (subject, fact, source),
         )
         conn.commit()
-        return f"Ricordato (fatto #{cur.lastrowid}): {subject} — {fact}"
+        fact_id = cur.lastrowid
     finally:
         conn.close()
+    _index_fact(fact_id, subject, fact)  # type: ignore[arg-type]
+    return f"Ricordato (fatto #{fact_id}): {subject} — {fact}"
 
 
-def _recall(args: dict, _ctx: dict) -> str:
-    query = (args.get("query") or "").strip()
-    limit = int(args.get("limit") or 10)
+def _keyword_recall(query: str, limit: int) -> str:
     conn = connect()
     try:
         if query:
             rows = conn.execute(
-                "SELECT id, subject, fact, source, updated_at FROM memory_facts "
+                "SELECT id, subject, fact, source FROM memory_facts "
                 "WHERE subject LIKE ? OR fact LIKE ? ORDER BY updated_at DESC LIMIT ?",
                 (f"%{query}%", f"%{query}%", limit),
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT id, subject, fact, source, updated_at FROM memory_facts "
-                "ORDER BY updated_at DESC LIMIT ?",
+                "SELECT id, subject, fact, source FROM memory_facts ORDER BY updated_at DESC LIMIT ?",
                 (limit,),
             ).fetchall()
     finally:
@@ -62,6 +73,20 @@ def _recall(args: dict, _ctx: dict) -> str:
     if not rows:
         return "Nessun ricordo pertinente."
     return "\n".join(f"#{r['id']} {r['subject']}: {r['fact']}  ({r['source']})" for r in rows)
+
+
+def _recall(args: dict, _ctx: dict) -> str:
+    query = (args.get("query") or "").strip()
+    limit = int(args.get("limit") or 5)
+    if not query:
+        return _keyword_recall("", limit)
+
+    results = sem.search(query, k=limit)
+    if results:  # richiamo semantico riuscito
+        lines = [f"{r['text']}  (sim {r['score']})" for r in results]
+        return "Ricordi pertinenti:\n" + "\n".join(lines)
+    # results è None (embedding non disponibili) o [] (indice vuoto): parole chiave
+    return _keyword_recall(query, limit)
 
 
 def _forget(args: dict, _ctx: dict) -> str:
@@ -72,9 +97,28 @@ def _forget(args: dict, _ctx: dict) -> str:
     try:
         cur = conn.execute("DELETE FROM memory_facts WHERE id = ?", (int(fid),))
         conn.commit()
-        return f"Dimenticato fatto #{fid}." if cur.rowcount else f"Nessun fatto #{fid}."
     finally:
         conn.close()
+    sem.delete_ref("fact", int(fid))
+    return f"Dimenticato fatto #{fid}." if cur.rowcount else f"Nessun fatto #{fid}."
+
+
+def _reindex(_args: dict, _ctx: dict) -> str:
+    if not sem.available():
+        return (
+            "Embedding non disponibili: assicurati che Ollama sia attivo e che il "
+            f"modello '{settings.embed_model}' sia scaricato (ollama pull nomic-embed-text)."
+        )
+    conn = connect()
+    try:
+        rows = conn.execute("SELECT id, subject, fact FROM memory_facts").fetchall()
+    finally:
+        conn.close()
+    done = 0
+    for r in rows:
+        if sem.index_text("fact", r["id"], f"{r['subject']}: {r['fact']}"):
+            done += 1
+    return f"Reindicizzati {done}/{len(rows)} fatti nella memoria semantica."
 
 
 TOOLS = [
@@ -96,10 +140,13 @@ TOOLS = [
     ),
     Tool(
         name="recall",
-        description="Cerca nei fatti ricordati per rispondere a domande sull'utente.",
+        description=(
+            "Cerca nei ricordi per rispondere a domande sull'utente. Usa la ricerca "
+            "semantica (per significato), con fallback alle parole chiave."
+        ),
         parameters=obj(
             {
-                "query": {"type": "string", "description": "Parole chiave da cercare."},
+                "query": {"type": "string", "description": "Cosa vuoi ricordare."},
                 "limit": {"type": "integer"},
             }
         ),
@@ -107,8 +154,14 @@ TOOLS = [
     ),
     Tool(
         name="forget_fact",
-        description="Elimina un fatto dalla memoria dato il suo id.",
+        description="Elimina un fatto dalla memoria (e dall'indice) dato il suo id.",
         parameters=obj({"id": {"type": "integer"}}, required=["id"]),
         run=_forget,
+    ),
+    Tool(
+        name="reindex_memory",
+        description="Ricostruisce l'indice semantico da tutti i fatti salvati.",
+        parameters=obj({}),
+        run=_reindex,
     ),
 ]

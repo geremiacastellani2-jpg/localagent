@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
+import httpx
 from openai import OpenAI
 
 from .config import Settings, settings
@@ -45,3 +46,51 @@ class Router:
 
 
 router = Router()
+
+
+def _strip_data_url(data_url: str) -> str:
+    return data_url.split(",", 1)[1] if "," in data_url else data_url
+
+
+def vision_describe(data_url: str, prompt: str, max_tokens: int = 500) -> str:
+    """Manda un'immagine (data URL JPEG) a un modello multimodale e ritorna il testo.
+
+    - Cloud (OpenRouter): formato OpenAI standard `image_url`.
+    - Locale (Ollama): API nativa `/api/chat` con `images`, che supporta le
+      immagini in modo affidabile indipendentemente dalla versione dell'endpoint
+      OpenAI-compatibile.
+    """
+    tier = settings.resolve_tier(settings.vision_tier)
+
+    if tier == "cloud":
+        if not settings.has_cloud():
+            raise RuntimeError("VISION_TIER=cloud ma OPENROUTER_API_KEY non è impostata.")
+        client = _client(settings.openrouter_base_url, settings.openrouter_api_key)
+        resp = client.chat.completions.create(
+            model=settings.cloud_vision_model,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": data_url}},
+                    ],
+                }
+            ],
+            max_tokens=max_tokens,
+        )
+        return resp.choices[0].message.content or ""
+
+    # locale — Ollama nativo
+    host = settings.ollama_native_base()
+    r = httpx.post(
+        f"{host}/api/chat",
+        json={
+            "model": settings.local_vision_model,
+            "messages": [{"role": "user", "content": prompt, "images": [_strip_data_url(data_url)]}],
+            "stream": False,
+        },
+        timeout=120,
+    )
+    r.raise_for_status()
+    return (r.json().get("message") or {}).get("content", "") or ""
