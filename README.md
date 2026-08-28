@@ -5,15 +5,17 @@ promemoria, memoria a lungo termine e **vista** (il modello guarda attraverso la
 camera e ti dice cosa vede). Modelli **ibridi** — Ollama in locale, OpenRouter in
 cloud — tramite un'unica API OpenAI-compatibile.
 
-> Questa è la **Fase 1** del progetto. Architettura di riferimento completa
-> (memoria a vettori, bus messaggi Matrix, WhatsApp/SMS/iMessage, riconoscimento
-> volti/voce, scheduler proattivo): vedi il blueprint collegato in fondo.
+> Fasi **1–2** completate. Architettura di riferimento completa (memoria a
+> vettori, bus messaggi Matrix, WhatsApp/SMS/iMessage, riconoscimento volti/voce,
+> scheduler proattivo): vedi il blueprint collegato in fondo.
 
 ## Cosa c'è già
 
 - 💬 **Chat web locale** (`http://127.0.0.1:8765`) — l'interfaccia da cui parli.
 - 👁️ **Vista** — attivi la camera nel browser e chiedi «cosa vedi?»: il frame
   viene mandato a un modello multimodale (VLM) e l'agente descrive scena e oggetti.
+- 📅 **Calendario** — crea, sposta ed elenca eventi; archivio locale che si
+  **sincronizza con CalDAV** (iCloud/Google/Fastmail) se configurato.
 - 🧠 **Memoria** livello 1 — fatti durevoli su di te, salvati e richiamati.
 - 🗒️ **Note** e ⏰ **promemoria** su archivio locale SQLite.
 - 🔀 **Router ibrido** — stesso codice per locale e cloud, cambia solo il `base_url`.
@@ -51,6 +53,18 @@ vista (`VISION_TIER=local`), non lascia mai il Mac.
 
 Senza UI, c'è un fallback lato server via OpenCV (`pip install opencv-python`).
 
+## Come funziona il calendario
+
+L'archivio locale SQLite è la **fonte di verità**: crei e sposti eventi lì, sempre
+e comunque. Se imposti le variabili `CALDAV_*` nel `.env`, ogni modifica viene
+**rispecchiata sul server CalDAV** (iCloud/Google/Fastmail) e `sync_calendar` tira
+giù gli eventi esistenti nell'archivio locale. Senza CalDAV, il calendario resta
+pienamente funzionante ma solo sul Mac.
+
+Le date si passano in **ISO 8601**; per "domani alle 15" l'agente chiama prima
+`get_current_time` e calcola la data giusta. Nella chat trovi il pulsante 📅 per
+l'agenda di oggi.
+
 ## Struttura
 
 ```
@@ -58,13 +72,15 @@ agent/
   config.py        impostazioni + routing dei modelli
   llm.py           client OpenAI-compatibile (Ollama / OpenRouter)
   core.py          loop dell'agente con tool-calling
-  db.py            SQLite: note, promemoria, fatti
+  db.py            SQLite: note, promemoria, fatti, eventi
+  calendar_store.py archivio locale eventi (fonte di verità)
+  caldav_sync.py   sincronizzazione con server CalDAV
   state.py         ultimo frame camera per sessione (in memoria)
-  tools/           note, promemoria, memoria, vista, ora
+  tools/           note, promemoria, memoria, calendario, vista, ora
   perception/      cattura frame camera (fallback headless)
   server.py        FastAPI: /chat + chat web
 web/
-  index.html       la chat locale (con camera)
+  index.html       la chat locale (con camera e agenda)
 ```
 
 ## Sicurezza
@@ -76,6 +92,6 @@ web/
 
 ## Prossime fasi
 
-Calendario (CalDAV), memoria a vettori (sqlite-vec), email, bus messaggi Matrix
-con bridge WhatsApp/SMS/iMessage, riconoscimento volti/voce e scheduler proattivo.
+Memoria a vettori (sqlite-vec), email, bus messaggi Matrix con bridge
+WhatsApp/SMS/iMessage, riconoscimento volti/voce e scheduler proattivo.
 Vedi il blueprint dell'architettura per il percorso completo.

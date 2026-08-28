@@ -52,6 +52,13 @@ class Settings:
     # tier per la vista (VLM); "auto" preferisce il cloud se c'è la chiave
     vision_tier: str = field(default_factory=lambda: os.getenv("VISION_TIER", "auto"))
 
+    # --- Calendario: CalDAV (iCloud / Google / Fastmail / Radicale…) ---
+    caldav_url: str = field(default_factory=lambda: os.getenv("CALDAV_URL", ""))
+    caldav_username: str = field(default_factory=lambda: os.getenv("CALDAV_USERNAME", ""))
+    caldav_password: str = field(default_factory=lambda: os.getenv("CALDAV_PASSWORD", ""))
+    # nome del calendario da usare (vuoto = il primo/predefinito)
+    caldav_calendar: str = field(default_factory=lambda: os.getenv("CALDAV_CALENDAR", ""))
+
     # --- Storage ---
     db_path: Path = field(default_factory=lambda: Path(os.getenv("DB_PATH", str(DATA_DIR / "maggiordomo.db"))))
 
@@ -67,6 +74,9 @@ class Settings:
 
     def has_cloud(self) -> bool:
         return bool(self.openrouter_api_key)
+
+    def caldav_configured(self) -> bool:
+        return bool(self.caldav_url and self.caldav_username and self.caldav_password)
 
 
 settings = Settings()

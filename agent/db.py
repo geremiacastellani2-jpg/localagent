@@ -35,6 +35,20 @@ CREATE TABLE IF NOT EXISTS memory_facts (
     created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
+
+CREATE TABLE IF NOT EXISTS events (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    uid         TEXT UNIQUE,                 -- UID iCalendar (per la sync CalDAV)
+    title       TEXT NOT NULL,
+    start_at    TEXT NOT NULL,               -- ISO canonico YYYY-MM-DDTHH:MM:SS
+    end_at      TEXT,                        -- ISO canonico (facoltativo)
+    all_day     INTEGER NOT NULL DEFAULT 0,
+    location    TEXT DEFAULT '',
+    notes       TEXT DEFAULT '',
+    caldav_href TEXT,                        -- href dell'oggetto remoto (update/delete)
+    created_at  TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_events_start ON events(start_at);
 """
 
 

@@ -98,6 +98,7 @@
       </div>
       <div class="row">
         <button class="icon" id="camBtn" title="Attiva/disattiva camera">📷</button>
+        <button class="icon" id="calBtn" title="Agenda di oggi">📅</button>
         <button class="icon" id="eyeBtn" title="Cosa vedi?" disabled>👁️</button>
         <textarea id="input" placeholder="Scrivi un messaggio…" rows="1"></textarea>
         <button class="send" id="send">Invia</button>
@@ -196,6 +197,7 @@ async function send(text){
 
 sendBtn.addEventListener("click", () => send());
 eyeBtn.addEventListener("click", () => send("Cosa vedi in questo momento?"));
+document.getElementById("calBtn").addEventListener("click", () => send("Cosa ho in agenda oggi?"));
 camBtn.addEventListener("click", toggleCam);
 input.addEventListener("keydown", e => {
   if(e.key === "Enter" && !e.shiftKey){ e.preventDefault(); send(); }
