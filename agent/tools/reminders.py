@@ -6,6 +6,7 @@ li fa "scattare" (notifiche proattive) arriva nella fase Proattività.
 
 from __future__ import annotations
 
+from ..calendar_store import normalize_dt
 from ..db import connect
 from .base import Tool, obj
 
@@ -15,6 +16,11 @@ def _add_reminder(args: dict, _ctx: dict) -> str:
     if not text:
         return "[errore] testo del promemoria mancante"
     due_at = (args.get("due_at") or "").strip() or None
+    if due_at:
+        try:
+            due_at = normalize_dt(due_at)  # ISO canonico: confrontabile dallo scheduler
+        except ValueError:
+            return "[errore] scadenza non valida: usa ISO 8601 (es. 2026-08-29T09:00)"
     conn = connect()
     try:
         cur = conn.execute("INSERT INTO reminders (text, due_at) VALUES (?, ?)", (text, due_at))

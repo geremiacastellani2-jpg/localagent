@@ -15,6 +15,7 @@ import time
 _lock = threading.Lock()
 _frames: dict[str, str] = {}           # session -> data URL (jpeg base64)
 _objects: dict[str, list[str]] = {}    # session -> etichette oggetti correnti
+_faces: dict[str, list[str]] = {}      # session -> nomi volti riconosciuti
 _updated: dict[str, float] = {}        # session -> timestamp ultimo frame
 
 
@@ -38,6 +39,16 @@ def get_frame(session: str) -> str | None:
 def get_objects(session: str) -> list[str]:
     with _lock:
         return list(_objects.get(session, []))
+
+
+def set_faces(session: str, names: list[str] | None) -> None:
+    with _lock:
+        _faces[session] = list(names or [])
+
+
+def get_faces(session: str) -> list[str]:
+    with _lock:
+        return list(_faces.get(session, []))
 
 
 def frame_age(session: str) -> float | None:

@@ -76,6 +76,13 @@ class Settings:
     matrix_password: str = field(default_factory=lambda: os.getenv("MATRIX_PASSWORD", ""))
     matrix_device_id: str = field(default_factory=lambda: os.getenv("MATRIX_DEVICE_ID", "MAGGIORDOMO"))
 
+    # --- Proattività (Fase 6) ---
+    scheduler_enabled: bool = field(default_factory=lambda: _bool("SCHEDULER_ENABLED", True))
+    scheduler_interval_seconds: int = field(default_factory=lambda: int(os.getenv("SCHEDULER_INTERVAL_SECONDS", "60")))
+    brief_hour: int = field(default_factory=lambda: int(os.getenv("BRIEF_HOUR", "8")))
+    # secondi di assenza oltre i quali un volto che riappare conta come "arrivo"
+    presence_arrival_gap_seconds: int = field(default_factory=lambda: int(os.getenv("PRESENCE_ARRIVAL_GAP", "120")))
+
     # --- Storage ---
     db_path: Path = field(default_factory=lambda: Path(os.getenv("DB_PATH", str(DATA_DIR / "maggiordomo.db"))))
 

@@ -107,6 +107,33 @@ check("send_email guardato senza config", "non configurata" in _send_email({"to"
 _chats = _list_chats({}, {}).lower()
 check("messaggi guardati senza config", any(s in _chats for s in ("non installato", "non configurato", "non attivi")))
 
+# Fase 6 — notifiche, presenza, scheduler, rassegna
+from agent import notifications, presence  # noqa: E402
+from agent import scheduler as sched  # noqa: E402
+from agent.tools.reminders import _add_reminder  # noqa: E402
+from agent.tools.briefing import _daily_brief  # noqa: E402
+from agent.tools.vision import _who_is_here  # noqa: E402
+
+nid = notifications.push("prova", "info")
+check("notifica in coda", any(i["id"] == nid for i in notifications.since(nid - 1)))
+
+arrivals = presence.update(["Mario"])
+check("primo avvistamento = arrivo", "Mario" in arrivals)
+check("secondo avvistamento non è arrivo", "Mario" not in presence.update(["Mario"]))
+check("presenza corrente", "Mario" in presence.present(within=15))
+check("who_is_here riconosce", "Mario" in _who_is_here({}, {}))
+
+_add_reminder({"text": "chiama il dentista", "due_at": "2020-01-01T09:00"}, {})
+_before = notifications.latest_id()
+sched.scheduler._check_reminders()
+check("promemoria scaduto notificato",
+      any("dentista" in i["text"] for i in notifications.since(_before)))
+_before2 = notifications.latest_id()
+sched.scheduler._check_reminders()  # non deve rinotificare
+check("promemoria non rinotificato", not notifications.since(_before2))
+
+check("rassegna composta", "Rassegna" in _daily_brief({}, {}))
+
 # registro
 reg = build_registry()
 names = {t["function"]["name"] for t in reg.schemas()}
@@ -116,7 +143,8 @@ expected = {"add_note", "list_notes", "delete_note", "add_reminder", "list_remin
             "add_event", "list_events", "upcoming_events", "move_event", "delete_event", "sync_calendar",
             "list_emails", "read_email", "send_email",
             "list_chats", "read_chat", "send_message",
-            "list_pending_actions", "approve_action", "reject_action"}
+            "list_pending_actions", "approve_action", "reject_action",
+            "who_is_here", "daily_brief"}
 check("tutti gli strumenti registrati", expected <= names)
 
 # registro: strumento sconosciuto non esplode

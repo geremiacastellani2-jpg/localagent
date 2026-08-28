@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS reminders (
     text       TEXT NOT NULL,
     due_at     TEXT,
     done       INTEGER NOT NULL DEFAULT 0,
+    notified   INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
 
@@ -83,10 +84,18 @@ def connect() -> sqlite3.Connection:
     return conn
 
 
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, decl: str) -> None:
+    cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    if column not in cols:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+
+
 def init_db() -> None:
     conn = connect()
     try:
         conn.executescript(_SCHEMA)
+        # migrazioni leggere per DB creati da versioni precedenti
+        _ensure_column(conn, "reminders", "notified", "INTEGER NOT NULL DEFAULT 0")
         conn.commit()
     finally:
         conn.close()

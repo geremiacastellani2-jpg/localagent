@@ -5,23 +5,23 @@ promemoria, memoria a lungo termine e **vista** (il modello guarda attraverso la
 camera e ti dice cosa vede). Modelli **ibridi** — Ollama in locale, OpenRouter in
 cloud — tramite un'unica API OpenAI-compatibile.
 
-> Fasi **1–5** completate. Manca la Fase 6 (riconoscimento volti/voce, scheduler
-> proattivo): vedi il blueprint collegato in fondo.
+> Tutte le **6 fasi** del blueprint sono implementate. Questo è ancora uno
+> scaffold: alcune parti (biometria offline pesante, e2ee Matrix) sono lasciate
+> come irrobustimenti futuri, documentati sotto.
 
 ## Cosa c'è già
 
-- 💬 **Chat web locale** (`http://127.0.0.1:8765`) — l'interfaccia da cui parli.
-- 👁️ **Vista dal vivo** — la camera è un feed live: il browser riconosce gli
-  oggetti in tempo reale (bounding box) e l'agente sa cosa c'è in vista *adesso*
-  (`current_view`) o ne dà una descrizione dettagliata con un VLM (`look`).
-- 📅 **Calendario** — crea, sposta ed elenca eventi; archivio locale che si
-  **sincronizza con CalDAV** (iCloud/Google/Fastmail) se configurato.
-- 🧠 **Memoria a due livelli** — fatti strutturati (livello 1) + **richiamo
-  semantico** per significato con embedding locali (livello 2).
-- ✉️ **Email** — legge la posta (IMAP) e prepara gli invii (SMTP); vedi coda.
-- 💬 **Messaggi** — WhatsApp/SMS/iMessage unificati via **Matrix + mautrix**.
-- ✅ **Coda di approvazioni** — ogni invio (email o messaggio) richiede la tua
-  conferma prima di partire.
+- 💬 **Chat web locale** (`http://127.0.0.1:8765`) — l'interfaccia da cui parli,
+  a voce (🎤 Web Speech) o scritto; risposte lette ad alta voce (🔊 opzionale).
+- 👁️ **Vista dal vivo** — feed live: riconoscimento **oggetti** in tempo reale e
+  **volti** registrati (face-api.js nel browser); l'agente sa cosa/chi c'è
+  *adesso* (`current_view`, `who_is_here`) o descrive con un VLM (`look`).
+- 🔔 **Proattività** — promemoria che **scattano**, **rassegna del mattino** e
+  avviso quando riconosce una persona; notifiche mostrate nella chat.
+- 📅 **Calendario** — crea/sposta/elenca eventi; **sincronizza con CalDAV**.
+- 🧠 **Memoria a due livelli** — fatti strutturati + **richiamo semantico**.
+- ✉️ **Email** (IMAP/SMTP) e 💬 **Messaggi** (WhatsApp/SMS/iMessage via Matrix).
+- ✅ **Coda di approvazioni** — ogni invio richiede la tua conferma.
 - 🗒️ **Note** e ⏰ **promemoria** su archivio locale SQLite.
 - 🔀 **Router ibrido** — stesso codice per locale e cloud, cambia solo il `base_url`.
 
@@ -127,11 +127,15 @@ agent/
   email_client.py  lettura IMAP e invio SMTP (Fase 4)
   matrix_client.py bridge Matrix in thread asincrono (Fase 5)
   outbox.py        coda di approvazioni per gli invii
-  state.py         frame live e oggetti rilevati, per sessione (in memoria)
+  scheduler.py     promemoria che scattano + rassegna del mattino (Fase 6)
+  briefing.py      compositore della rassegna
+  notifications.py coda di notifiche proattive (polling dalla UI)
+  presence.py      chi è davanti alla camera (arrivi vs presenza continua)
+  state.py         frame live, oggetti e volti, per sessione (in memoria)
   tools/           note, promemoria, memoria, calendario, email, messaggi,
-                   approvazioni, vista, ora
+                   approvazioni, rassegna, vista, ora
   perception/      cattura frame camera (fallback headless)
-  server.py        FastAPI: /chat + /frame + chat web
+  server.py        FastAPI: /chat + /frame + /notifications + chat web
 web/
   index.html       la chat locale (camera live + rilevamento oggetti)
 deploy/matrix/     docker-compose: Synapse + mautrix-whatsapp
@@ -145,6 +149,24 @@ docs/whatsapp.md   guida per collegare WhatsApp
 - La biometria/immagini restano locali se usi il tier locale per la vista.
 - Per l'accesso da remoto usa una VPN privata (es. Tailscale), mai una porta aperta.
 
+## Proattività e percezione (Fase 6)
+
+- **Scheduler** (`SCHEDULER_ENABLED`, `BRIEF_HOUR`): in background fa scattare i
+  promemoria scaduti e manda la **rassegna del mattino** all'ora impostata. Le
+  notifiche compaiono nella chat (la UI fa polling su `/notifications`). Chiedi
+  «come sono messo oggi?» per la rassegna su richiesta (`daily_brief`).
+- **Riconoscimento volti:** attiva la camera, premi **＋ registra volto**, dai un
+  nome. I descrittori restano **nel tuo browser** (localStorage), non sul server.
+  Quando una persona nota compare, l'agente te lo segnala; `who_is_here` dice chi
+  c'è ora.
+- **Voce:** 🎤 detta il messaggio (Web Speech, `it-IT`), 🔊 fa leggere le risposte
+  ad alta voce (SpeechSynthesis). Tutto nel browser.
+
+> Nota: volti e voce girano **nel browser** — niente modelli nativi da installare,
+> tutto resta sul Mac. Per una biometria offline più robusta (InsightFace,
+> whisper.cpp, speaker-ID) e per l'identificazione di *chi parla*, vedi il
+> blueprint: è il naturale irrobustimento successivo.
+
 ## Email e messaggi
 
 - **Email:** imposta `EMAIL_ADDRESS`/`EMAIL_PASSWORD` (per Gmail, una *password per
@@ -154,8 +176,10 @@ docs/whatsapp.md   guida per collegare WhatsApp
   [`docs/whatsapp.md`](docs/whatsapp.md). ⚠️ Il bridge WhatsApp automatizza il tuo
   numero personale (contro i ToS, rischio ban): ogni invio richiede conferma.
 
-## Prossime fasi
+## Irrobustimenti futuri
 
-Fase 6: riconoscimento volti/voce e scheduler proattivo (rassegna del mattino,
-promemoria che scattano, triage dei messaggi importanti). Vedi il blueprint
-dell'architettura per il percorso completo.
+Le 6 fasi ci sono tutte. I prossimi passi sono di robustezza, non di funzioni
+nuove: biometria offline più forte (InsightFace, whisper.cpp, speaker-ID),
+supporto e2ee per le stanze Matrix cifrate, consolidamento automatico della
+memoria (promuovere gli episodi a fatti), e un cruscotto web per la coda di
+approvazioni. Vedi il blueprint dell'architettura.

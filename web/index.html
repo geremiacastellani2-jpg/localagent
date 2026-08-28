@@ -48,6 +48,8 @@
   .msg.bot{align-self:flex-start;background:var(--surface);border:1px solid var(--border);
     border-bottom-left-radius:5px}
   .msg.bot.thinking{color:var(--muted);font-style:italic}
+  .msg.note{align-self:stretch;max-width:100%;background:var(--accent-tint);
+    border:1px solid var(--accent);border-left-width:4px;color:var(--ink);font-size:.92rem}
   .msg .img{display:block;margin-top:.5rem;border-radius:8px;max-width:180px;border:1px solid var(--border)}
   .hint{max-width:760px;margin:0 auto 1rem;color:var(--muted);font-size:.85rem;text-align:center}
 
@@ -57,19 +59,22 @@
   .cam.on{display:flex}
   .camwrap{position:relative;width:150px;height:112px;flex:0 0 auto}
   .camwrap video,.camwrap canvas{
-    position:absolute;inset:0;width:150px;height:112px;border-radius:10px;
-    transform:scaleX(-1);   /* specchio: video e overlay allineati */
+    position:absolute;inset:0;width:150px;height:112px;border-radius:10px;transform:scaleX(-1);
   }
   .camwrap video{object-fit:cover;border:1px solid var(--border);background:#000}
   .camwrap canvas{pointer-events:none}
-  .caminfo{font-size:.8rem;color:var(--muted);line-height:1.35}
+  .caminfo{font-size:.8rem;color:var(--muted);line-height:1.4}
   .caminfo .live{color:var(--accent-strong);font-weight:600}
-  .caminfo #liveObjs{font-family:ui-monospace,Menlo,monospace;font-size:.75rem}
-  .row{display:flex;gap:.5rem;align-items:flex-end}
+  .caminfo #liveObjs,.caminfo #liveFaces{font-family:ui-monospace,Menlo,monospace;font-size:.74rem}
+  .caminfo button.enroll{
+    margin-top:.35rem;font-size:.72rem;border:1px solid var(--border);background:var(--surface-2);
+    color:var(--ink);border-radius:7px;padding:.2rem .5rem;cursor:pointer;
+  }
+  .row{display:flex;gap:.5rem;align-items:flex-end;flex-wrap:wrap}
   textarea{
     flex:1;resize:none;min-height:44px;max-height:160px;padding:.7rem .8rem;
     border:1px solid var(--border);border-radius:12px;background:var(--surface);color:var(--ink);
-    font:inherit;font-size:.97rem;line-height:1.4;
+    font:inherit;font-size:.97rem;line-height:1.4;min-width:120px;
   }
   textarea:focus{outline:2px solid var(--accent);outline-offset:0}
   button.icon{
@@ -77,6 +82,7 @@
     border-radius:12px;height:44px;min-width:44px;font-size:1.1rem;cursor:pointer;
   }
   button.icon.active{background:var(--accent-tint);border-color:var(--accent)}
+  button.icon.rec{background:#c0392b;border-color:#c0392b;color:#fff}
   button.send{
     border:none;background:var(--accent);color:#fff;border-radius:12px;height:44px;
     padding:0 1.1rem;font-weight:650;cursor:pointer;font-size:.95rem;
@@ -94,7 +100,7 @@
   </header>
 
   <main>
-    <div class="hint" id="hint">Parlagli in italiano. Attiva la camera con 📷: vede dal vivo e riconosce gli oggetti in tempo reale.</div>
+    <div class="hint" id="hint">Parlagli in italiano — a voce (🎤) o scritto. Con 📷 vede dal vivo e riconosce oggetti e volti registrati.</div>
     <div class="thread" id="thread"></div>
   </main>
 
@@ -106,12 +112,16 @@
           <canvas id="overlay"></canvas>
         </div>
         <div class="caminfo">
-          <div><span class="live">● LIVE</span> — l'agente vede il momento presente.</div>
+          <div><span class="live">● LIVE</span> — vede il momento presente.</div>
           <div id="liveObjs">avvio riconoscimento…</div>
+          <div id="liveFaces"></div>
+          <button class="enroll" id="enrollBtn">＋ registra volto</button>
         </div>
       </div>
       <div class="row">
         <button class="icon" id="camBtn" title="Attiva/disattiva camera">📷</button>
+        <button class="icon" id="micBtn" title="Parla" disabled>🎤</button>
+        <button class="icon" id="ttsBtn" title="Risposte a voce">🔊</button>
         <button class="icon" id="calBtn" title="Agenda di oggi">📅</button>
         <button class="icon" id="eyeBtn" title="Cosa vedi?" disabled>👁️</button>
         <textarea id="input" placeholder="Scrivi un messaggio…" rows="1"></textarea>
@@ -120,170 +130,222 @@
     </div>
   </footer>
 
-<!-- Rilevamento oggetti in tempo reale, nel browser (pagina locale, nessuna CSP) -->
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/dist/face-api.js"></script>
 <script>
 const SESSION = "default";
-const thread = document.getElementById("thread");
-const input = document.getElementById("input");
-const sendBtn = document.getElementById("send");
-const camBtn = document.getElementById("camBtn");
-const eyeBtn = document.getElementById("eyeBtn");
-const cam = document.getElementById("cam");
-const video = document.getElementById("video");
-const overlay = document.getElementById("overlay");
-const liveObjsEl = document.getElementById("liveObjs");
-const statusEl = document.getElementById("status");
+const FACE_MODELS = "https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/model";
+const $ = id => document.getElementById(id);
+const thread=$("thread"), input=$("input"), sendBtn=$("send"), camBtn=$("camBtn"),
+      eyeBtn=$("eyeBtn"), micBtn=$("micBtn"), ttsBtn=$("ttsBtn"), cam=$("cam"),
+      video=$("video"), overlay=$("overlay"), liveObjsEl=$("liveObjs"),
+      liveFacesEl=$("liveFaces"), statusEl=$("status");
 
-let stream = null;
-let detector = null;          // modello coco-ssd (caricato una volta)
-let liveObjects = [];         // etichette attualmente in vista
-let detectTimer = null;
-let streamTimer = null;
+let stream=null, detector=null, faceReady=false, faceMatcher=null;
+let liveObjects=[], liveFaces=[], lastObjs=[], lastFaces=[];
+let detectTimer=null, faceTimer=null, streamTimer=null;
+let ttsOn=false, notifCursor=0;
 
+// ---------- stato / util ----------
 async function loadStatus(){
-  try{
-    const r = await fetch("/health"); const j = await r.json();
-    statusEl.textContent = `${j.tier} · ${j.model}`;
-  }catch{ statusEl.textContent = "offline"; }
+  try{ const j=await (await fetch("/health")).json(); statusEl.textContent=`${j.tier} · ${j.model}`; }
+  catch{ statusEl.textContent="offline"; }
 }
 loadStatus();
 
-function addMsg(role, text, imgDataUrl){
-  const el = document.createElement("div");
-  el.className = "msg " + (role === "user" ? "user" : "bot");
-  el.textContent = text;
-  if(imgDataUrl){
-    const img = document.createElement("img");
-    img.className = "img"; img.src = imgDataUrl; el.appendChild(img);
-  }
-  thread.appendChild(el);
-  el.scrollIntoView({behavior:"smooth", block:"end"});
+function addMsg(role, text, imgDataUrl, cls){
+  const el=document.createElement("div");
+  el.className="msg "+(role==="user"?"user":"bot")+(cls?(" "+cls):"");
+  el.textContent=text;
+  if(imgDataUrl){ const img=document.createElement("img"); img.className="img"; img.src=imgDataUrl; el.appendChild(img); }
+  thread.appendChild(el); el.scrollIntoView({behavior:"smooth",block:"end"});
   return el;
 }
 
 function captureFrame(){
-  if(!stream || video.videoWidth === 0) return null;
-  const maxW = 640;
-  const scale = Math.min(1, maxW / video.videoWidth);
-  const c = document.createElement("canvas");
-  c.width = Math.round(video.videoWidth * scale);
-  c.height = Math.round(video.videoHeight * scale);
-  c.getContext("2d").drawImage(video, 0, 0, c.width, c.height);
-  return c.toDataURL("image/jpeg", 0.7);
+  if(!stream||video.videoWidth===0) return null;
+  const scale=Math.min(1,640/video.videoWidth);
+  const c=document.createElement("canvas");
+  c.width=Math.round(video.videoWidth*scale); c.height=Math.round(video.videoHeight*scale);
+  c.getContext("2d").drawImage(video,0,0,c.width,c.height);
+  return c.toDataURL("image/jpeg",0.7);
 }
 
-// --- rilevamento live ---
-async function ensureDetector(){
-  if(detector || !window.cocoSsd) return;
-  try{ liveObjsEl.textContent = "carico il modello…"; detector = await cocoSsd.load(); }
-  catch(e){ liveObjsEl.textContent = "riconoscimento non disponibile"; }
-}
-
-function drawBoxes(preds){
-  const ctx = overlay.getContext("2d");
-  overlay.width = video.videoWidth || 150;
-  overlay.height = video.videoHeight || 112;
+// ---------- disegno overlay (oggetti + volti) ----------
+function redraw(){
+  const ctx=overlay.getContext("2d");
+  overlay.width=video.videoWidth||150; overlay.height=video.videoHeight||112;
   ctx.clearRect(0,0,overlay.width,overlay.height);
-  ctx.lineWidth = Math.max(2, overlay.width/160);
-  ctx.strokeStyle = "#35c9ac"; ctx.fillStyle = "#35c9ac";
-  ctx.font = `${Math.max(12, overlay.width/28)}px -apple-system,sans-serif`;
-  preds.forEach(p => {
-    const [x,y,w,h] = p.bbox;
-    ctx.strokeRect(x,y,w,h);
-    ctx.fillText(p.class, x+3, y+ (y>14?-4:14));
-  });
+  ctx.lineWidth=Math.max(2,overlay.width/160);
+  ctx.font=`${Math.max(12,overlay.width/26)}px -apple-system,sans-serif`;
+  ctx.strokeStyle="#35c9ac"; ctx.fillStyle="#35c9ac";
+  lastObjs.forEach(p=>{ const[x,y,w,h]=p.bbox; ctx.strokeRect(x,y,w,h); ctx.fillText(p.class,x+3,y>14?y-4:y+14); });
+  ctx.strokeStyle="#e0a24a"; ctx.fillStyle="#e0a24a";
+  lastFaces.forEach(f=>{ const b=f.box; ctx.strokeRect(b.x,b.y,b.width,b.height); ctx.fillText(f.label,b.x+3,b.y>14?b.y-4:b.y+14); });
 }
 
+// ---------- rilevamento oggetti ----------
+async function ensureDetector(){
+  if(detector||!window.cocoSsd) return;
+  try{ liveObjsEl.textContent="carico il modello…"; detector=await cocoSsd.load(); }
+  catch{ liveObjsEl.textContent="riconoscimento oggetti non disponibile"; }
+}
 async function detectLoop(){
   if(!stream) return;
-  if(detector && video.videoWidth){
+  if(detector&&video.videoWidth){
     try{
-      const preds = (await detector.detect(video)).filter(p => p.score > 0.5);
-      liveObjects = preds.map(p => p.class);
-      drawBoxes(preds);
-      const counts = {};
-      liveObjects.forEach(o => counts[o] = (counts[o]||0)+1);
-      const listed = Object.entries(counts).map(([k,v]) => v>1?`${k}×${v}`:k).join(", ");
-      liveObjsEl.textContent = listed ? "in vista: " + listed : "nessun oggetto riconosciuto";
-    }catch{ /* ignora un frame fallito */ }
+      const preds=(await detector.detect(video)).filter(p=>p.score>0.5);
+      lastObjs=preds; liveObjects=preds.map(p=>p.class); redraw();
+      const c={}; liveObjects.forEach(o=>c[o]=(c[o]||0)+1);
+      const s=Object.entries(c).map(([k,v])=>v>1?`${k}×${v}`:k).join(", ");
+      liveObjsEl.textContent=s?("oggetti: "+s):"nessun oggetto";
+    }catch{}
   }
-  detectTimer = setTimeout(detectLoop, 300);
+  detectTimer=setTimeout(detectLoop,300);
 }
 
-async function pushFrame(){
-  const frame = captureFrame();
-  if(!frame) return;
+// ---------- riconoscimento volti (face-api.js) ----------
+function loadEnrolled(){ try{ return JSON.parse(localStorage.getItem("faces")||"[]"); }catch{ return []; } }
+function saveEnrolled(list){ try{ localStorage.setItem("faces",JSON.stringify(list)); }catch{} }
+function rebuildMatcher(){
+  if(!window.faceapi) return;
+  const list=loadEnrolled();
+  if(!list.length){ faceMatcher=null; return; }
+  const labeled=list.map(e=>new faceapi.LabeledFaceDescriptors(e.name,[new Float32Array(e.descriptor)]));
+  faceMatcher=new faceapi.FaceMatcher(labeled,0.55);
+}
+async function ensureFace(){
+  if(faceReady||!window.faceapi) return;
   try{
-    await fetch("/frame", {method:"POST", headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({session:SESSION, frame, objects:liveObjects})});
-  }catch{ /* rete assente: riprova al prossimo giro */ }
+    liveFacesEl.textContent="carico riconoscimento volti…";
+    await faceapi.nets.tinyFaceDetector.loadFromUri(FACE_MODELS);
+    await faceapi.nets.faceLandmark68Net.loadFromUri(FACE_MODELS);
+    await faceapi.nets.faceRecognitionNet.loadFromUri(FACE_MODELS);
+    faceReady=true; rebuildMatcher(); liveFacesEl.textContent="";
+  }catch{ liveFacesEl.textContent="riconoscimento volti non disponibile"; }
+}
+async function faceLoop(){
+  if(!stream) return;
+  if(faceReady&&video.videoWidth){
+    try{
+      const dets=await faceapi.detectAllFaces(video,new faceapi.TinyFaceDetectorOptions())
+        .withFaceLandmarks().withFaceDescriptors();
+      lastFaces=[]; liveFaces=[];
+      dets.forEach(d=>{
+        const label=faceMatcher?faceMatcher.findBestMatch(d.descriptor).label:"volto";
+        const name=(label&&label!=="unknown")?label:"sconosciuto";
+        lastFaces.push({box:d.detection.box,label:name});
+        if(name!=="sconosciuto"&&name!=="volto") liveFaces.push(name);
+      });
+      redraw();
+      liveFacesEl.textContent=lastFaces.length?("volti: "+lastFaces.map(f=>f.label).join(", ")):"";
+    }catch{}
+  }
+  faceTimer=setTimeout(faceLoop,1300);
+}
+async function enrollFace(){
+  if(!stream){ addMsg("bot","Attiva prima la camera (📷)."); return; }
+  await ensureFace();
+  if(!faceReady){ addMsg("bot","Riconoscimento volti non disponibile."); return; }
+  const det=await faceapi.detectSingleFace(video,new faceapi.TinyFaceDetectorOptions())
+    .withFaceLandmarks().withFaceDescriptor();
+  if(!det){ addMsg("bot","Non vedo un volto nitido: mettiti bene in quadro e riprova."); return; }
+  const name=prompt("Nome della persona da registrare:");
+  if(!name) return;
+  const list=loadEnrolled();
+  list.push({name:name.trim(),descriptor:Array.from(det.descriptor)});
+  saveEnrolled(list); rebuildMatcher();
+  addMsg("bot",`Volto di ${name.trim()} registrato ✓ (resta sul tuo browser).`);
+}
+
+// ---------- feed verso il backend ----------
+async function pushFrame(){
+  const frame=captureFrame(); if(!frame) return;
+  try{ await fetch("/frame",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({session:SESSION,frame,objects:liveObjects,faces:liveFaces})}); }catch{}
 }
 
 async function toggleCam(){
   if(stream){
-    clearTimeout(detectTimer); clearInterval(streamTimer);
-    stream.getTracks().forEach(t => t.stop());
-    stream = null; cam.classList.remove("on");
-    camBtn.classList.remove("active"); eyeBtn.disabled = true;
-    liveObjects = [];
-    fetch("/frame", {method:"POST", headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({session:SESSION, frame:null, objects:[]})});
+    clearTimeout(detectTimer); clearTimeout(faceTimer); clearInterval(streamTimer);
+    stream.getTracks().forEach(t=>t.stop()); stream=null;
+    cam.classList.remove("on"); camBtn.classList.remove("active"); eyeBtn.disabled=true;
+    liveObjects=[]; liveFaces=[]; lastObjs=[]; lastFaces=[];
+    fetch("/frame",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({session:SESSION,frame:null,objects:[],faces:[]})});
     return;
   }
   try{
-    stream = await navigator.mediaDevices.getUserMedia({video:true});
-    video.srcObject = stream; cam.classList.add("on");
-    camBtn.classList.add("active"); eyeBtn.disabled = false;
-    await ensureDetector();
-    detectLoop();
-    streamTimer = setInterval(pushFrame, 1200);  // feed live verso il backend
-  }catch(e){
-    addMsg("bot", "Non riesco ad accedere alla camera: " + e.message);
-  }
+    stream=await navigator.mediaDevices.getUserMedia({video:true});
+    video.srcObject=stream; cam.classList.add("on"); camBtn.classList.add("active"); eyeBtn.disabled=false;
+    await ensureDetector(); detectLoop();
+    ensureFace().then(()=>faceLoop());
+    streamTimer=setInterval(pushFrame,1200);
+  }catch(e){ addMsg("bot","Non riesco ad accedere alla camera: "+e.message); }
 }
 
-async function send(text){
-  const message = (text ?? input.value).trim();
-  if(!message) return;
-  const frame = captureFrame();
-  addMsg("user", message, frame);
-  input.value = ""; input.style.height = "auto";
-  sendBtn.disabled = true;
-  const thinking = addMsg("bot", "sta pensando…");
-  thinking.classList.add("thinking");
+// ---------- voce in ingresso (Web Speech) ----------
+const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+let recog=null, recognizing=false;
+if(SR){
+  micBtn.disabled=false;
+  recog=new SR(); recog.lang="it-IT"; recog.interimResults=false; recog.maxAlternatives=1;
+  recog.onresult=e=>{ const t=e.results[0][0].transcript; send(t); };
+  recog.onend=()=>{ recognizing=false; micBtn.classList.remove("rec"); };
+  recog.onerror=()=>{ recognizing=false; micBtn.classList.remove("rec"); };
+}
+function toggleMic(){
+  if(!recog) return;
+  if(recognizing){ recog.stop(); return; }
+  try{ recog.start(); recognizing=true; micBtn.classList.add("rec"); }catch{}
+}
+
+// ---------- voce in uscita (TTS) ----------
+function speak(text){
+  if(!ttsOn||!window.speechSynthesis) return;
+  const u=new SpeechSynthesisUtterance(text); u.lang="it-IT";
+  window.speechSynthesis.speak(u);
+}
+function toggleTts(){ ttsOn=!ttsOn; ttsBtn.classList.toggle("active",ttsOn); if(!ttsOn) window.speechSynthesis?.cancel(); }
+
+// ---------- notifiche proattive (polling) ----------
+async function pollNotifications(){
   try{
-    const r = await fetch("/chat", {
-      method:"POST", headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({session:SESSION, message, frame, objects:liveObjects})
-    });
-    const j = await r.json();
-    thinking.classList.remove("thinking");
-    thinking.textContent = j.reply || "(nessuna risposta)";
-  }catch(e){
-    thinking.classList.remove("thinking");
-    thinking.textContent = "Errore di rete: " + e.message;
-  }finally{
-    sendBtn.disabled = false; input.focus();
-  }
+    const j=await (await fetch("/notifications?cursor="+notifCursor)).json();
+    notifCursor=j.cursor||notifCursor;
+    (j.items||[]).forEach(n=>{ addMsg("bot",n.text,null,"note"); speak(n.text); });
+  }catch{}
+}
+setInterval(pollNotifications,5000);
+
+// ---------- invio ----------
+async function send(text){
+  const message=(text??input.value).trim(); if(!message) return;
+  const frame=captureFrame();
+  addMsg("user",message,frame);
+  input.value=""; input.style.height="auto"; sendBtn.disabled=true;
+  const thinking=addMsg("bot","sta pensando…"); thinking.classList.add("thinking");
+  try{
+    const r=await fetch("/chat",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({session:SESSION,message,frame,objects:liveObjects})});
+    const j=await r.json();
+    thinking.classList.remove("thinking"); thinking.textContent=j.reply||"(nessuna risposta)";
+    speak(j.reply||"");
+  }catch(e){ thinking.classList.remove("thinking"); thinking.textContent="Errore di rete: "+e.message; }
+  finally{ sendBtn.disabled=false; input.focus(); }
 }
 
-sendBtn.addEventListener("click", () => send());
-eyeBtn.addEventListener("click", () => send("Cosa vedi in questo momento?"));
-document.getElementById("calBtn").addEventListener("click", () => send("Cosa ho in agenda oggi?"));
-camBtn.addEventListener("click", toggleCam);
-input.addEventListener("keydown", e => {
-  if(e.key === "Enter" && !e.shiftKey){ e.preventDefault(); send(); }
-});
-input.addEventListener("input", () => {
-  input.style.height = "auto";
-  input.style.height = Math.min(160, input.scrollHeight) + "px";
-});
-document.getElementById("reset").addEventListener("click", async () => {
-  await fetch("/reset?session=" + SESSION, {method:"POST"});
-  thread.innerHTML = "";
-});
+sendBtn.addEventListener("click",()=>send());
+eyeBtn.addEventListener("click",()=>send("Cosa vedi in questo momento?"));
+$("calBtn").addEventListener("click",()=>send("Cosa ho in agenda oggi?"));
+camBtn.addEventListener("click",toggleCam);
+micBtn.addEventListener("click",toggleMic);
+ttsBtn.addEventListener("click",toggleTts);
+$("enrollBtn").addEventListener("click",enrollFace);
+input.addEventListener("keydown",e=>{ if(e.key==="Enter"&&!e.shiftKey){ e.preventDefault(); send(); }});
+input.addEventListener("input",()=>{ input.style.height="auto"; input.style.height=Math.min(160,input.scrollHeight)+"px"; });
+$("reset").addEventListener("click",async()=>{ await fetch("/reset?session="+SESSION,{method:"POST"}); thread.innerHTML=""; });
 </script>
 </body>
 </html>

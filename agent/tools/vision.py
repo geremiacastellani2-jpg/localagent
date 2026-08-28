@@ -12,6 +12,7 @@ quindi `look` guarda sempre il momento presente, non una vecchia foto.
 
 from __future__ import annotations
 
+from .. import presence
 from ..llm import vision_describe
 from ..perception.camera import capture_frame_data_url
 from ..state import frame_age, get_frame, get_objects
@@ -40,6 +41,13 @@ def _current_view(_args: dict, ctx: dict) -> str:
     return f"In vista adesso ({freshness}): {listed}. Usa `look` per una descrizione dettagliata."
 
 
+def _who_is_here(_args: dict, _ctx: dict) -> str:
+    people = presence.present(within=15)
+    if not people:
+        return "Non riconosco nessuno davanti alla camera in questo momento."
+    return "Riconosco: " + ", ".join(people) + "."
+
+
 def _look(args: dict, ctx: dict) -> str:
     question = (args.get("question") or "").strip() or _DEFAULT_PROMPT
     session = ctx.get("session", "default")
@@ -64,6 +72,12 @@ TOOLS = [
         ),
         parameters=obj({}),
         run=_current_view,
+    ),
+    Tool(
+        name="who_is_here",
+        description="Dice quali persone note sono riconosciute dalla camera adesso.",
+        parameters=obj({}),
+        run=_who_is_here,
     ),
     Tool(
         name="look",
