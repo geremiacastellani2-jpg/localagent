@@ -49,6 +49,8 @@ class Agent:
         init_db()
         self.registry = build_registry()
         self._histories: dict[str, list[dict]] = {}
+        self.last_tier: str = ""
+        self.last_model: str = ""
 
     def _history(self, session: str) -> list[dict]:
         if session not in self._histories:
@@ -58,11 +60,12 @@ class Agent:
     def reset(self, session: str) -> None:
         self._histories.pop(session, None)
 
-    def chat(self, session: str, user_message: str) -> str:
+    def chat(self, session: str, user_message: str, tier: str | None = None) -> str:
         history = self._history(session)
         history.append({"role": "user", "content": user_message})
 
-        client, model = router.resolve("chat")
+        client, model, used_tier = router.resolve("chat", override=tier)
+        self.last_tier, self.last_model = used_tier, model
         tools = self.registry.schemas()
         context = {"session": session}
 

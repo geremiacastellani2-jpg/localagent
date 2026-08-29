@@ -90,12 +90,6 @@ class Settings:
     host: str = field(default_factory=lambda: os.getenv("HOST", "127.0.0.1"))
     port: int = field(default_factory=lambda: int(os.getenv("PORT", "8765")))
 
-    def resolve_tier(self, tier: str) -> str:
-        """Trasforma 'auto' in 'cloud' o 'local' in base a cosa è configurato."""
-        if tier == "auto":
-            return "cloud" if self.openrouter_api_key else "local"
-        return tier
-
     def has_cloud(self) -> bool:
         return bool(self.openrouter_api_key)
 

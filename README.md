@@ -23,7 +23,11 @@ cloud — tramite un'unica API OpenAI-compatibile.
 - ✉️ **Email** (IMAP/SMTP) e 💬 **Messaggi** (WhatsApp/SMS/iMessage via Matrix).
 - ✅ **Coda di approvazioni** — ogni invio richiede la tua conferma.
 - 🗒️ **Note** e ⏰ **promemoria** su archivio locale SQLite.
-- 🔀 **Router ibrido** — stesso codice per locale e cloud, cambia solo il `base_url`.
+- 🔀 **Router ibrido vero** — con `DEFAULT_TIER=auto` la chat va in **locale**
+  quando Ollama è attivo (privato, gratuito) e in cloud altrimenti; la **vista**
+  preferisce il cloud (qualità) con fallback sul locale. Selettore
+  auto/locale/cloud per singolo messaggio nella chat, e `/diag` per la
+  diagnostica completa.
 
 ## Requisiti
 
@@ -63,9 +67,11 @@ Apri **http://127.0.0.1:8765** nel browser (sul Mac). Scrivi in italiano; premi
    OPENROUTER_API_KEY=sk-or-v1-...
    CLOUD_MODEL=anthropic/claude-3.5-sonnet
    ```
-3. Verifica: apri <http://127.0.0.1:8765/health>. Se vedi `"cloud_configured": true`
-   e `"tier": "cloud"`, la chiave è letta correttamente. Se resta `local`, il `.env`
-   non è stato caricato (controlla di averlo salvato nella cartella del progetto).
+3. Verifica: apri <http://127.0.0.1:8765/health>. Se vedi `"cloud_configured": true`,
+   la chiave è letta. Nota: con Ollama attivo la **chat resta in locale** (è
+   l'ibrido: privato e gratuito per la routine); il cloud serve per la **vista**
+   e quando il locale non è disponibile. Vuoi il cloud per un messaggio? Usa il
+   selettore in alto nella chat. Diagnostica completa: <http://127.0.0.1:8765/diag>.
 4. Prova indipendente della chiave:
    ```bash
    curl https://openrouter.ai/api/v1/models -H "Authorization: Bearer $OPENROUTER_API_KEY" | head

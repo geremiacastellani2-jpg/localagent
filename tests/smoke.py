@@ -134,6 +134,25 @@ check("promemoria non rinotificato", not notifications.since(_before2))
 
 check("rassegna composta", "Rassegna" in _daily_brief({}, {}))
 
+# router ibrido — semantica di "auto"
+import time as _t  # noqa: E402
+from agent import llm as llmmod  # noqa: E402
+from agent.config import settings as _cfg  # noqa: E402
+
+_oldkey = _cfg.openrouter_api_key
+llmmod._OLLAMA_OK = (_t.time(), False)  # simula: Ollama giù
+_cfg.openrouter_api_key = ""
+check("auto senza nulla → local", llmmod.resolve_chat_tier() == "local")
+check("vision senza chiave → local", llmmod.resolve_vision_tier() == "local")
+_cfg.openrouter_api_key = "sk-test"
+check("auto con chiave e Ollama giù → cloud", llmmod.resolve_chat_tier() == "cloud")
+check("vision con chiave → cloud", llmmod.resolve_vision_tier() == "cloud")
+llmmod._OLLAMA_OK = (_t.time(), True)  # simula: Ollama su
+check("ibrido: chat resta locale con Ollama su", llmmod.resolve_chat_tier() == "local")
+check("override cloud rispettato", llmmod.resolve_chat_tier("cloud") == "cloud")
+_cfg.openrouter_api_key = _oldkey
+llmmod._OLLAMA_OK = None
+
 # registro
 reg = build_registry()
 names = {t["function"]["name"] for t in reg.schemas()}

@@ -39,10 +39,13 @@ class ChatIn(BaseModel):
     message: str
     frame: str | None = None  # data URL JPEG dalla webcam (facoltativo)
     objects: list[str] | None = None  # oggetti live rilevati nel browser
+    tier: str | None = None  # override per-messaggio: "local" | "cloud"
 
 
 class ChatOut(BaseModel):
     reply: str
+    tier: str = ""
+    model: str = ""
 
 
 class FrameIn(BaseModel):
@@ -59,13 +62,70 @@ def index() -> FileResponse:
 
 @app.get("/health")
 def health() -> dict:
-    tier = settings.resolve_tier(settings.default_tier)
+    from .llm import ollama_reachable, resolve_chat_tier, resolve_vision_tier
+
+    chat_tier = resolve_chat_tier()
+    vision_tier = resolve_vision_tier()
+    chat_model = settings.cloud_model if chat_tier == "cloud" else settings.local_model
+    vision_model = settings.cloud_vision_model if vision_tier == "cloud" else settings.local_vision_model
     return {
         "ok": True,
-        "tier": tier,
-        "model": settings.cloud_model if tier == "cloud" else settings.local_model,
+        # compatibilità con la UI precedente
+        "tier": chat_tier,
+        "model": chat_model,
+        "chat": {"tier": chat_tier, "model": chat_model},
+        "vision": {"tier": vision_tier, "model": vision_model},
         "cloud_configured": settings.has_cloud(),
+        "ollama_reachable": ollama_reachable(),
     }
+
+
+@app.get("/diag")
+def diag() -> dict:
+    """Diagnostica completa: cosa è configurato, cosa risponde, cosa manca."""
+    import httpx
+
+    from .llm import ollama_reachable
+    from .matrix_client import bridge, status as matrix_status
+
+    out: dict = {"ok": True}
+
+    # Ollama: raggiungibile? quali modelli sono scaricati?
+    ollama = {"reachable": ollama_reachable(), "models": [], "missing": []}
+    if ollama["reachable"]:
+        try:
+            r = httpx.get(f"{settings.ollama_native_base()}/api/tags", timeout=3)
+            ollama["models"] = [m.get("name", "") for m in r.json().get("models", [])]
+        except Exception as exc:  # noqa: BLE001
+            ollama["error"] = str(exc)
+    have = {m.split(":")[0] for m in ollama["models"]}
+    for wanted in (settings.local_model, settings.local_vision_model, settings.embed_model):
+        if wanted.split(":")[0] not in have:
+            ollama["missing"].append(f"ollama pull {wanted}")
+    out["ollama"] = ollama
+
+    # OpenRouter: la chiave funziona davvero?
+    if settings.has_cloud():
+        try:
+            r = httpx.get(
+                f"{settings.openrouter_base_url}/models",
+                headers={"Authorization": f"Bearer {settings.openrouter_api_key}"},
+                timeout=6,
+            )
+            out["openrouter"] = "ok" if r.status_code == 200 else f"errore http {r.status_code} (chiave non valida?)"
+        except Exception as exc:  # noqa: BLE001
+            out["openrouter"] = f"errore di rete: {exc}"
+    else:
+        out["openrouter"] = "non configurato (OPENROUTER_API_KEY vuota)"
+
+    out["calendario_caldav"] = "configurato" if settings.caldav_configured() else "non configurato"
+    out["email"] = "configurata" if settings.email_configured() else "non configurata"
+    out["matrix"] = matrix_status() if not bridge.available() else "configurato"
+    out["nota"] = (
+        "Camera, riconoscimento oggetti/volti e microfono girano NEL BROWSER: "
+        "controllali dalla pagina della chat (permessi browser + macOS), non da qui."
+    )
+    return out
 
 
 @app.post("/frame")
@@ -91,8 +151,16 @@ def chat(body: ChatIn) -> ChatOut:
     # aggiorna il frame live per questa sessione, così `look`/`current_view` lo usano
     if body.frame is not None or body.objects is not None:
         set_frame(body.session, body.frame, body.objects)
-    reply = agent.chat(body.session, body.message)
-    return ChatOut(reply=reply)
+    override = body.tier if body.tier in ("local", "cloud") else None
+    try:
+        reply = agent.chat(body.session, body.message, tier=override)
+    except Exception as exc:  # noqa: BLE001 — l'errore del modello deve arrivare leggibile in chat
+        reply = (
+            f"[errore modello] {exc}\n"
+            "Controlla http://127.0.0.1:8765/diag per vedere cosa manca "
+            "(Ollama attivo? modelli scaricati? chiave OpenRouter valida?)."
+        )
+    return ChatOut(reply=reply, tier=agent.last_tier, model=agent.last_model)
 
 
 @app.post("/reset")

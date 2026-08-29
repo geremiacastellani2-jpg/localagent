@@ -35,6 +35,13 @@
     color:var(--muted); background:var(--surface-2); border:1px solid var(--border);
     padding:.25rem .55rem; border-radius:999px;
   }
+  header select{
+    font:500 .72rem ui-monospace,Menlo,monospace; color:var(--ink);
+    background:var(--surface-2); border:1px solid var(--border); border-radius:8px;
+    padding:.25rem .4rem; cursor:pointer;
+  }
+  header a.diag{font:.7rem ui-monospace,monospace; color:var(--muted); text-decoration:none;
+    border:1px solid var(--border); border-radius:8px; padding:.25rem .5rem}
   header button.reset{
     background:none;border:1px solid var(--border);color:var(--muted);
     border-radius:8px;padding:.3rem .55rem;font-size:.75rem;cursor:pointer;
@@ -96,6 +103,12 @@
     <span class="dot"></span>
     <h1>Maggiordomo</h1>
     <span class="status" id="status">connessione…</span>
+    <select id="tierSel" title="Dove mandare la chat">
+      <option value="auto">auto</option>
+      <option value="local">locale</option>
+      <option value="cloud">cloud</option>
+    </select>
+    <a class="diag" href="/diag" target="_blank" title="Diagnostica configurazione">diag</a>
     <button class="reset" id="reset" title="Nuova conversazione">azzera</button>
   </header>
 
@@ -187,9 +200,13 @@ function redraw(){
 
 // ---------- rilevamento oggetti ----------
 async function ensureDetector(){
-  if(detector||!window.cocoSsd) return;
+  if(detector) return;
+  if(!window.cocoSsd){
+    liveObjsEl.textContent="librerie visione non caricate: serve internet, poi ricarica (⌘⇧R)";
+    return;
+  }
   try{ liveObjsEl.textContent="carico il modello…"; detector=await cocoSsd.load(); }
-  catch{ liveObjsEl.textContent="riconoscimento oggetti non disponibile"; }
+  catch{ liveObjsEl.textContent="modelli visione non scaricabili: controlla la connessione e ricarica"; }
 }
 async function detectLoop(){
   if(!stream) return;
@@ -216,7 +233,11 @@ function rebuildMatcher(){
   faceMatcher=new faceapi.FaceMatcher(labeled,0.55);
 }
 async function ensureFace(){
-  if(faceReady||!window.faceapi) return;
+  if(faceReady) return;
+  if(!window.faceapi){
+    liveFacesEl.textContent="libreria volti non caricata: serve internet, poi ricarica (⌘⇧R)";
+    return;
+  }
   try{
     liveFacesEl.textContent="carico riconoscimento volti…";
     await faceapi.nets.tinyFaceDetector.loadFromUri(FACE_MODELS);
@@ -288,15 +309,29 @@ async function toggleCam(){
 // ---------- voce in ingresso (Web Speech) ----------
 const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
 let recog=null, recognizing=false;
+micBtn.disabled=false;   // sempre cliccabile: se non supportato, spiega perché
 if(SR){
-  micBtn.disabled=false;
   recog=new SR(); recog.lang="it-IT"; recog.interimResults=false; recog.maxAlternatives=1;
   recog.onresult=e=>{ const t=e.results[0][0].transcript; send(t); };
   recog.onend=()=>{ recognizing=false; micBtn.classList.remove("rec"); };
-  recog.onerror=()=>{ recognizing=false; micBtn.classList.remove("rec"); };
+  recog.onerror=e=>{
+    recognizing=false; micBtn.classList.remove("rec");
+    const map={
+      "not-allowed":"permesso microfono negato. Consenti il microfono dal lucchetto nella barra indirizzi, e in Impostazioni di Sistema → Privacy e Sicurezza → Microfono abilita il browser.",
+      "service-not-allowed":"il servizio di riconoscimento vocale non è disponibile in questo browser: usa Google Chrome.",
+      "network":"il riconoscimento vocale richiede la connessione a internet.",
+      "audio-capture":"nessun microfono rilevato.",
+      "no-speech":""  // silenzio: nessun messaggio
+    };
+    const msg=(e.error in map)?map[e.error]:("errore: "+e.error);
+    if(msg) addMsg("bot","🎤 "+msg);
+  };
 }
 function toggleMic(){
-  if(!recog) return;
+  if(!recog){
+    addMsg("bot","🎤 Il riconoscimento vocale non è supportato da questo browser: usa Google Chrome. (La lettura ad alta voce 🔊 funziona comunque.)");
+    return;
+  }
   if(recognizing){ recog.stop(); return; }
   try{ recog.start(); recognizing=true; micBtn.classList.add("rec"); }catch{}
 }
@@ -327,10 +362,13 @@ async function send(text){
   input.value=""; input.style.height="auto"; sendBtn.disabled=true;
   const thinking=addMsg("bot","sta pensando…"); thinking.classList.add("thinking");
   try{
+    const tier=document.getElementById("tierSel").value;
     const r=await fetch("/chat",{method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({session:SESSION,message,frame,objects:liveObjects})});
+      body:JSON.stringify({session:SESSION,message,frame,objects:liveObjects,
+        tier:(tier==="auto"?null:tier)})});
     const j=await r.json();
     thinking.classList.remove("thinking"); thinking.textContent=j.reply||"(nessuna risposta)";
+    if(j.tier&&j.model) statusEl.textContent=`${j.tier} · ${j.model}`;
     speak(j.reply||"");
   }catch(e){ thinking.classList.remove("thinking"); thinking.textContent="Errore di rete: "+e.message; }
   finally{ sendBtn.disabled=false; input.focus(); }
