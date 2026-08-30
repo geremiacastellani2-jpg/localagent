@@ -99,6 +99,19 @@ cloud (testo piccolo, dettagli): per questo `VISION_TIER` ti fa scegliere —
 immagini non lasciano mai il Mac. Senza UI, c'è un fallback lato server via
 OpenCV (`pip install opencv-python`).
 
+**Gli oggetti arrivano al modello anche senza strumenti.** A ogni messaggio, se la
+camera è attiva, il server accoda al turno un *contesto automatico della vista*
+(oggetti e persone riconosciuti adesso): così anche i modelli locali deboli nel
+tool-calling sanno cosa c'è davanti alla camera. `look` resta per le descrizioni
+ricche.
+
+**Limiti e qualità del rilevatore live.** Il riconoscimento in tempo reale usa
+coco-ssd (base `mobilenet_v2`): conosce le **80 classi COCO** (persone, tazze,
+laptop, bottiglie…) — non è a vocabolario aperto. Per "qualsiasi oggetto" la via
+giusta è `look` (il VLM riconosce ciò che vuoi). Se il tuo modello locale ignora
+gli strumenti, prova un modello con tool-calling migliore, ad es.
+`LOCAL_MODEL=gpt-oss:20b`, oppure usa il selettore **cloud** nella chat.
+
 ## Come funziona la memoria
 
 - **Livello 1 — fatti:** righe esplicite e modificabili (`remember_fact`).

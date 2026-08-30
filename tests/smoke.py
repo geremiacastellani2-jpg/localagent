@@ -179,5 +179,28 @@ check("frame ripulito", get_frame("s1") is None)
 import agent.server as srv  # noqa: E402
 check("server importato", srv.app is not None and srv.agent is not None)
 
+# contesto "Stato attuale" iniettato nel system prompt a ogni turno
+set_frame("ctx", "data:image/jpeg;base64,AAAA", ["person", "person", "cup"])
+from agent.state import set_faces  # noqa: E402
+set_faces("ctx", ["Anna"])
+ctx = srv.build_context("ctx")
+check("contesto: data e ora presenti", "Data e ora correnti" in ctx)
+check("contesto: oggetti contati", "person×2" in ctx and "cup" in ctx)
+check("contesto: volti riconosciuti", "Anna" in ctx)
+check("contesto: agenda inclusa", "Agenda di oggi" in ctx)
+set_frame("ctx", None)
+check("contesto: camera spenta segnalata", "Camera: spenta" in srv.build_context("ctx"))
+
+# il context_block finisce nel system prompt del turno
+from agent.core import Agent as _Agent  # noqa: E402
+_a = _Agent()
+hist = _a._history("t1")
+_sys = "Stato attuale"
+try:
+    _a.chat("t1", "ciao", context_block="- Data e ora correnti: test")
+except Exception:
+    pass  # nessun modello in CI: l'importante è lo stato della history
+check("system prompt aggiornato col contesto", "Data e ora correnti: test" in _a._history("t1")[0]["content"])
+
 print("\nStrumenti:", ", ".join(sorted(names)))
 sys.exit(0 if ok else 1)

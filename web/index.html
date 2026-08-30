@@ -143,9 +143,11 @@
     </div>
   </footer>
 
+<!-- face-api PRIMA di tfjs: ha il suo TensorFlow incorporato e i due runtime
+     non devono pestarsi i piedi (il tf globale per coco-ssd arriva dopo) -->
+<script src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/dist/face-api.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/dist/face-api.js"></script>
 <script>
 const SESSION = "default";
 const FACE_MODELS = "https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/model";
@@ -205,14 +207,20 @@ async function ensureDetector(){
     liveObjsEl.textContent="librerie visione non caricate: serve internet, poi ricarica (⌘⇧R)";
     return;
   }
-  try{ liveObjsEl.textContent="carico il modello…"; detector=await cocoSsd.load(); }
-  catch{ liveObjsEl.textContent="modelli visione non scaricabili: controlla la connessione e ricarica"; }
+  try{
+    liveObjsEl.textContent="carico il modello…";
+    // base mobilenet_v2: più accurata della variante lite di default
+    detector=await cocoSsd.load({base:"mobilenet_v2"});
+  }catch{
+    try{ detector=await cocoSsd.load(); }  // fallback alla variante lite
+    catch{ liveObjsEl.textContent="modelli visione non scaricabili: controlla la connessione e ricarica"; }
+  }
 }
 async function detectLoop(){
   if(!stream) return;
   if(detector&&video.videoWidth){
     try{
-      const preds=(await detector.detect(video)).filter(p=>p.score>0.5);
+      const preds=(await detector.detect(video,20,0.35)).filter(p=>p.score>0.4);
       lastObjs=preds; liveObjects=preds.map(p=>p.class); redraw();
       const c={}; liveObjects.forEach(o=>c[o]=(c[o]||0)+1);
       const s=Object.entries(c).map(([k,v])=>v>1?`${k}×${v}`:k).join(", ");
@@ -232,6 +240,13 @@ function rebuildMatcher(){
   const labeled=list.map(e=>new faceapi.LabeledFaceDescriptors(e.name,[new Float32Array(e.descriptor)]));
   faceMatcher=new faceapi.FaceMatcher(labeled,0.55);
 }
+const FACE_OPTS=()=>new faceapi.TinyFaceDetectorOptions({inputSize:320,scoreThreshold:0.3});
+let faceErrShown=false;
+function faceFail(where,e){
+  const msg=(e&&(e.message||e))+"";
+  liveFacesEl.textContent="volti: errore — "+msg.slice(0,120);
+  if(!faceErrShown){ faceErrShown=true; addMsg("bot","⚠️ Riconoscimento volti ("+where+"): "+msg); }
+}
 async function ensureFace(){
   if(faceReady) return;
   if(!window.faceapi){
@@ -240,17 +255,20 @@ async function ensureFace(){
   }
   try{
     liveFacesEl.textContent="carico riconoscimento volti…";
+    // inizializza esplicitamente il backend del tf incorporato in face-api
+    try{ if(faceapi.tf?.setBackend){ await faceapi.tf.setBackend("webgl"); await faceapi.tf.ready(); } }
+    catch{ try{ await faceapi.tf.setBackend("cpu"); await faceapi.tf.ready(); }catch{} }
     await faceapi.nets.tinyFaceDetector.loadFromUri(FACE_MODELS);
     await faceapi.nets.faceLandmark68Net.loadFromUri(FACE_MODELS);
     await faceapi.nets.faceRecognitionNet.loadFromUri(FACE_MODELS);
-    faceReady=true; rebuildMatcher(); liveFacesEl.textContent="";
-  }catch{ liveFacesEl.textContent="riconoscimento volti non disponibile"; }
+    faceReady=true; rebuildMatcher(); liveFacesEl.textContent="volti: pronto";
+  }catch(e){ faceFail("caricamento modelli",e); }
 }
 async function faceLoop(){
   if(!stream) return;
   if(faceReady&&video.videoWidth){
     try{
-      const dets=await faceapi.detectAllFaces(video,new faceapi.TinyFaceDetectorOptions())
+      const dets=await faceapi.detectAllFaces(video,FACE_OPTS())
         .withFaceLandmarks().withFaceDescriptors();
       lastFaces=[]; liveFaces=[];
       dets.forEach(d=>{
@@ -260,24 +278,27 @@ async function faceLoop(){
         if(name!=="sconosciuto"&&name!=="volto") liveFaces.push(name);
       });
       redraw();
-      liveFacesEl.textContent=lastFaces.length?("volti: "+lastFaces.map(f=>f.label).join(", ")):"";
-    }catch{}
+      liveFacesEl.textContent=lastFaces.length?("volti: "+lastFaces.map(f=>f.label).join(", ")):"volti: nessuno in vista";
+    }catch(e){ faceFail("rilevamento",e); }
   }
   faceTimer=setTimeout(faceLoop,1300);
 }
 async function enrollFace(){
-  if(!stream){ addMsg("bot","Attiva prima la camera (📷)."); return; }
-  await ensureFace();
-  if(!faceReady){ addMsg("bot","Riconoscimento volti non disponibile."); return; }
-  const det=await faceapi.detectSingleFace(video,new faceapi.TinyFaceDetectorOptions())
-    .withFaceLandmarks().withFaceDescriptor();
-  if(!det){ addMsg("bot","Non vedo un volto nitido: mettiti bene in quadro e riprova."); return; }
-  const name=prompt("Nome della persona da registrare:");
-  if(!name) return;
-  const list=loadEnrolled();
-  list.push({name:name.trim(),descriptor:Array.from(det.descriptor)});
-  saveEnrolled(list); rebuildMatcher();
-  addMsg("bot",`Volto di ${name.trim()} registrato ✓ (resta sul tuo browser).`);
+  try{
+    if(!stream){ addMsg("bot","Attiva prima la camera (📷)."); return; }
+    await ensureFace();
+    if(!faceReady){ addMsg("bot","Riconoscimento volti non disponibile — vedi il messaggio d'errore sopra."); return; }
+    addMsg("bot","Cerco il volto, guarda la camera…");
+    const det=await faceapi.detectSingleFace(video,FACE_OPTS())
+      .withFaceLandmarks().withFaceDescriptor();
+    if(!det){ addMsg("bot","Non vedo un volto nitido: avvicinati, illumina la scena e riprova."); return; }
+    const name=prompt("Nome della persona da registrare:");
+    if(!name) return;
+    const list=loadEnrolled();
+    list.push({name:name.trim(),descriptor:Array.from(det.descriptor)});
+    saveEnrolled(list); rebuildMatcher();
+    addMsg("bot",`Volto di ${name.trim()} registrato ✓ (resta sul tuo browser).`);
+  }catch(e){ faceFail("registrazione",e); }
 }
 
 // ---------- feed verso il backend ----------

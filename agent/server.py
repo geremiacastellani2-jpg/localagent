@@ -13,10 +13,12 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+from collections import Counter
+
 from . import notifications, presence
 from .config import settings
 from .core import Agent
-from .state import set_faces, set_frame
+from .state import frame_age, get_faces, get_objects, set_faces, set_frame
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
@@ -146,6 +148,72 @@ def get_notifications(cursor: int = 0) -> dict:
     return {"items": items, "cursor": items[-1]["id"] if items else cursor}
 
 
+_GIORNI = ["lunedì", "martedì", "mercoledì", "giovedì", "venerdì", "sabato", "domenica"]
+_MESI = ["gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno", "luglio",
+         "agosto", "settembre", "ottobre", "novembre", "dicembre"]
+
+
+def build_context(session: str) -> str:
+    """Sezione "Stato attuale" rigenerata a ogni turno per il system prompt.
+
+    Dà al modello, senza bisogno di tool-calling: data/ora correnti, stato della
+    camera (oggetti e persone in vista), agenda di oggi e contatori utili.
+    """
+    from datetime import datetime
+
+    from . import calendar_store as cal
+    from .db import connect
+
+    now = datetime.now()
+    lines = [
+        f"- Data e ora correnti: {_GIORNI[now.weekday()]} {now.day} {_MESI[now.month - 1]} "
+        f"{now.year}, {now:%H:%M}"
+    ]
+
+    # camera / vista live
+    age = frame_age(session)
+    if age is None or age > 20:
+        lines.append("- Camera: spenta (nessuna vista disponibile)")
+    else:
+        parts: list[str] = []
+        objs = get_objects(session)
+        if objs:
+            counted = Counter(objs)
+            parts.append(
+                "oggetti in vista: "
+                + ", ".join(f"{k}×{v}" if v > 1 else k for k, v in counted.items())
+            )
+        faces = get_faces(session)
+        if faces:
+            parts.append("persone riconosciute: " + ", ".join(sorted(set(faces))))
+        stato = "; ".join(parts) if parts else "nessun oggetto riconosciuto al momento"
+        lines.append(f"- Camera: ATTIVA — {stato}")
+
+    # agenda e contatori (best-effort: mai bloccare la chat per un errore qui)
+    try:
+        s, e = cal.day_bounds(now.strftime("%Y-%m-%d"))
+        events = cal.list_events(s, e)
+        if events:
+            shown = "; ".join(cal.format_event(ev) for ev in events[:3])
+            extra = f" (+{len(events) - 3} altri)" if len(events) > 3 else ""
+            lines.append(f"- Agenda di oggi: {shown}{extra}")
+        else:
+            lines.append("- Agenda di oggi: nessun evento")
+        conn = connect()
+        try:
+            rem = conn.execute("SELECT COUNT(*) AS c FROM reminders WHERE done = 0").fetchone()["c"]
+            pend = conn.execute(
+                "SELECT COUNT(*) AS c FROM pending_actions WHERE status = 'pending'"
+            ).fetchone()["c"]
+        finally:
+            conn.close()
+        lines.append(f"- Promemoria aperti: {rem} · Azioni in attesa di conferma: {pend}")
+    except Exception:
+        pass
+
+    return "\n".join(lines)
+
+
 @app.post("/chat", response_model=ChatOut)
 def chat(body: ChatIn) -> ChatOut:
     # aggiorna il frame live per questa sessione, così `look`/`current_view` lo usano
@@ -153,7 +221,9 @@ def chat(body: ChatIn) -> ChatOut:
         set_frame(body.session, body.frame, body.objects)
     override = body.tier if body.tier in ("local", "cloud") else None
     try:
-        reply = agent.chat(body.session, body.message, tier=override)
+        reply = agent.chat(
+            body.session, body.message, tier=override, context_block=build_context(body.session)
+        )
     except Exception as exc:  # noqa: BLE001 — l'errore del modello deve arrivare leggibile in chat
         reply = (
             f"[errore modello] {exc}\n"

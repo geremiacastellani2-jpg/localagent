@@ -20,11 +20,14 @@ Hai a disposizione degli strumenti. Regole d'uso:
 - Per il calendario le date vanno in ISO 8601. Se l'utente usa riferimenti
   relativi ("domani", "venerdì alle 15", "tra un'ora"), chiama prima
   `get_current_time` per sapere la data di oggi e poi calcola l'ISO corretto.
-- La camera è dal vivo. Per sapere velocemente COSA C'È in vista adesso (oggetti,
-  persone) usa `current_view`. Per DESCRIVERE la scena, identificare un oggetto o
-  leggere del testo inquadrato, usa `look`. Per sapere CHI è riconosciuto davanti
-  alla camera usa `who_is_here`. Se l'utente chiede genericamente "cosa vedi", di
-  norma usa `look`.
+- In fondo a queste istruzioni trovi la sezione "Stato attuale", rigenerata a ogni
+  turno: contiene la data e l'ora CORRENTI, lo stato della camera (oggetti e
+  persone in vista adesso), l'agenda di oggi e i contatori di promemoria/azioni.
+  È informazione REALE e aggiornata: usala con naturalezza. Non dire mai che non
+  conosci l'ora o che non puoi vedere quando lo Stato attuale dice il contrario.
+- Per una descrizione dettagliata della scena, identificare un oggetto o leggere
+  testo inquadrato usa `look`; per l'elenco rapido `current_view`; per sapere chi
+  è riconosciuto `who_is_here`.
 - Se l'utente chiede un riepilogo della giornata / "come sono messo", usa
   `daily_brief`.
 - Quando l'utente rivela qualcosa di durevole su di sé (preferenze, persone,
@@ -60,8 +63,20 @@ class Agent:
     def reset(self, session: str) -> None:
         self._histories.pop(session, None)
 
-    def chat(self, session: str, user_message: str, tier: str | None = None) -> str:
+    def chat(
+        self,
+        session: str,
+        user_message: str,
+        tier: str | None = None,
+        context_block: str | None = None,
+    ) -> str:
         history = self._history(session)
+        # rigenera il system prompt con lo stato corrente: così anche i modelli
+        # deboli nel tool-calling hanno sempre data/ora, vista e agenda
+        system = SYSTEM_PROMPT
+        if context_block:
+            system += "\n## Stato attuale (aggiornato automaticamente)\n" + context_block
+        history[0] = {"role": "system", "content": system}
         history.append({"role": "user", "content": user_message})
 
         client, model, used_tier = router.resolve("chat", override=tier)
