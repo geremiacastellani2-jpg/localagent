@@ -70,18 +70,20 @@ check("ricerca vettoriale ordinata", res and res[0]["score"] >= res[-1]["score"]
 from agent.tools.calendar import _add_event, _list_events, _upcoming, _move_event, _delete_event  # noqa: E402
 from agent import caldav_sync  # noqa: E402
 
+from datetime import datetime as _dt, timedelta as _td  # noqa: E402
+_tomorrow = (_dt.now() + _td(days=1)).strftime("%Y-%m-%d")
 res = _add_event(
-    {"title": "Dentista", "start_at": "2026-08-29T15:00", "end_at": "2026-08-29T15:30", "location": "Centro"},
+    {"title": "Dentista", "start_at": f"{_tomorrow}T15:00", "end_at": f"{_tomorrow}T15:30", "location": "Centro"},
     {},
 )
 check("evento creato", "Dentista" in res)
-day = _list_events({"date": "2026-08-29"}, {})
+day = _list_events({"date": _tomorrow}, {})
 check("evento nell'agenda del giorno", "Dentista" in day)
 empty = _list_events({"date": "2030-01-01"}, {})
 check("giorno vuoto gestito", "Nessun evento" in empty)
 up = _upcoming({"limit": 5}, {})
 check("prossimi eventi elencati", "Dentista" in up)
-moved = _move_event({"id": 1, "start_at": "2026-08-29T16:00"}, {})
+moved = _move_event({"id": 1, "start_at": f"{_tomorrow}T16:00"}, {})
 check("evento spostato", "16:00" in moved)
 deleted = _delete_event({"id": 1}, {})
 check("evento eliminato", "Eliminato" in deleted)
@@ -185,7 +187,7 @@ from agent.state import set_faces  # noqa: E402
 set_faces("ctx", ["Anna"])
 ctx = srv.build_context("ctx")
 check("contesto: data e ora presenti", "Data e ora correnti" in ctx)
-check("contesto: oggetti contati", "person×2" in ctx and "cup" in ctx)
+check("contesto: oggetti contati (in italiano)", "persona×2" in ctx and "tazza" in ctx)
 check("contesto: volti riconosciuti", "Anna" in ctx)
 check("contesto: agenda inclusa", "Agenda di oggi" in ctx)
 set_frame("ctx", None)
@@ -258,6 +260,49 @@ try:
     check("fallback 429 cloud→locale", out == "ok dal locale" and _ag.last_tier == "local")
 finally:
     _core.router.resolve = _old_resolve
+
+
+# vista live: rilevazioni con posizione, eventi, scena, report, descrittore
+from agent import state as _st, vision_info as _vi  # noqa: E402
+from agent.vision_live import live_describer as _ld  # noqa: E402
+
+_dets = [{"label": "person", "score": 0.9, "box": [0.3, 0.1, 0.4, 0.8]},
+         {"label": "cup", "score": 0.7, "box": [0.05, 0.75, 0.1, 0.15]}]
+_st.set_frame("lv", "data:image/jpeg;base64,AAAA", detections=_dets)
+_st.set_frame("lv", "data:image/jpeg;base64,AAAA", detections=_dets)  # stabile → evento
+_desc = _vi.describe_detections(_st.get_detections("lv"))
+check("posizioni in italiano", "persona" in _desc and "tazza" in _desc and "al centro" in _desc)
+check("specchio: la tazza (x piccolo nel frame) è a destra per l'utente", "a destra" in _desc)
+check("evento 'in vista' registrato", any("in vista: persona, tazza" in t for _, t in _st.get_events("lv")))
+_st.set_scene("lv", "Una persona seduta alla scrivania con una tazza.")
+_lines = "\n".join(_vi.report_lines("lv"))
+check("report: camera attiva con posizioni", "Camera: ATTIVA" in _lines and "persona (" in _lines)
+check("report: scena inclusa", "Scena (descritta" in _lines)
+_rt = _vi.report_text("lv")
+check("current_view completo", "Eventi recenti" in _rt and "Scena" in _rt)
+_j = _vi.json_report("lv")
+check("json /vision", _j["active"] and _j["detections"][0]["label_it"] == "persona"
+      and _j["scene"]["text"].startswith("Una persona"))
+import agent.llm as _llm  # noqa: E402
+_orig_vd = _llm.vision_describe
+_llm.vision_describe = lambda frame, prompt, max_tokens=500: "Scena finta: scrivania e tazza."
+try:
+    check("descrittore: prima volta → descrive", _ld.should_describe("lv"))
+    check("descrittore: describe_once scrive la scena",
+          _ld.describe_once("lv") and _st.get_scene("lv")[0].startswith("Scena finta"))
+    check("descrittore: subito dopo non ridescrive", not _ld.should_describe("lv"))
+finally:
+    _llm.vision_describe = _orig_vd
+with TestClient(srv.app) as _c:
+    _r = _c.get("/vision?session=lv").json()
+    check("/vision endpoint", _r["objects"].get("persona") == 1 and _r["objects"].get("tazza") == 1)
+    _fr = _c.post("/frame", json={"session": "lv2", "frame": "data:image/jpeg;base64,AAAA",
+                                  "detections": [{"label": "laptop", "score": 0.8, "box": [0.4, 0.4, 0.2, 0.2]}],
+                                  "faces": ["Marco"]}).json()
+    check("/frame accetta rilevazioni e volti", _fr["ok"] and _st.get_faces("lv2") == ["Marco"]
+          and _st.get_detections("lv2")[0]["label"] == "laptop")
+    check("contesto turno include posizioni e persone",
+          "portatile (" in srv.build_context("lv2") and "Marco" in srv.build_context("lv2"))
 
 print("\nStrumenti:", ", ".join(sorted(names)))
 sys.exit(0 if ok else 1)

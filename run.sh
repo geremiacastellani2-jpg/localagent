@@ -19,6 +19,9 @@ if [ ! -f ".env" ]; then
   cp .env.example .env
 fi
 
+echo "→ Librerie di visione in locale (oggetti/volti, funzionano offline)…"
+bash scripts/fetch_vendor.sh || echo "   (la pagina userà la CDN)"
+
 echo "ℹ  Funzioni opzionali (calendario, memoria veloce, Matrix/WhatsApp):"
 echo "   ./.venv/bin/pip install -r requirements-optional.txt"
 

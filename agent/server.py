@@ -1,46 +1,64 @@
-"""Server locale: serve la chat web e l'endpoint /chat.
+"""Server locale: serve la chat web e gli endpoint dell'agente.
 
 Gira solo sulla tua macchina (default 127.0.0.1). La UI web è l'interfaccia
-principale: ci parli da lì e, se attivi la camera, ogni messaggio porta con sé
-il frame corrente così l'agente può "vedere".
+principale: ci parli da lì e, con la camera attiva, manda in continuo frame,
+rilevazioni (con posizione) e volti: è la "vista live" che finisce nello Stato
+attuale del modello, nello strumento current_view e nell'endpoint /vision.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
+import mimetypes
+
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from collections import Counter
-
-from . import notifications, presence
+from . import notifications, presence, state, vision_info
 from .config import settings
 from .core import Agent
-from .state import frame_age, get_faces, get_objects, set_faces, set_frame
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
 app = FastAPI(title="Maggiordomo Locale", version="0.1.0")
 agent = Agent()
 
+# librerie/modelli di visione scaricati da scripts/fetch_vendor.sh (opzionali:
+# se mancano, la pagina ripiega sulla CDN). MIME espliciti per wasm/mjs.
+mimetypes.add_type("application/wasm", ".wasm")
+mimetypes.add_type("text/javascript", ".mjs")
+mimetypes.add_type("application/octet-stream", ".tflite")
+app.mount("/vendor", StaticFiles(directory=str(WEB_DIR / "vendor"), check_dir=False), name="vendor")
+
 
 @app.on_event("startup")
 def _startup() -> None:
-    # avvia il bridge Matrix e lo scheduler proattivo (no-op se non configurati)
+    # bridge Matrix, scheduler proattivo e descrittore live (no-op se disattivi)
     from .matrix_client import bridge
     from .scheduler import scheduler
+    from .vision_live import live_describer
 
     bridge.start()
     scheduler.start()
+    live_describer.start()
+
+
+class Detection(BaseModel):
+    label: str
+    score: float = 0.0
+    box: list[float] = []  # [x, y, w, h] normalizzato 0..1 sul frame
 
 
 class ChatIn(BaseModel):
     session: str = "default"
     message: str
     frame: str | None = None  # data URL JPEG dalla webcam (facoltativo)
-    objects: list[str] | None = None  # oggetti live rilevati nel browser
+    objects: list[str] | None = None  # etichette live rilevate nel browser
+    detections: list[Detection] | None = None  # rilevazioni con posizione
+    faces: list[str] | None = None  # volti riconosciuti nel browser
     image: str | None = None  # foto ALLEGATA dall'utente al messaggio (data URL)
     tier: str | None = None  # override per-messaggio: "local" | "cloud"
 
@@ -55,7 +73,25 @@ class FrameIn(BaseModel):
     session: str = "default"
     frame: str | None = None
     objects: list[str] | None = None
-    faces: list[str] | None = None  # nomi volti riconosciuti nel browser
+    detections: list[Detection] | None = None
+    faces: list[str] | None = None
+
+
+def _apply_frame(
+    session: str,
+    frame: str | None,
+    objects: list[str] | None,
+    detections: list[Detection] | None,
+    faces: list[str] | None,
+) -> None:
+    dets = [d.model_dump() for d in detections] if detections is not None else None
+    if frame is not None or objects is not None or dets is not None:
+        state.set_frame(session, frame, objects, dets)
+    if faces is not None:
+        state.set_faces(session, faces)
+        for name in presence.update(faces):
+            notifications.push(f"👤 Ho riconosciuto {name} davanti alla camera.", "presence")
+            state.add_event(session, f"riconosciuto {name}")
 
 
 @app.get("/")
@@ -73,11 +109,11 @@ def health() -> dict:
     vision_model = settings.cloud_vision_model if vision_tier == "cloud" else settings.local_vision_model
     return {
         "ok": True,
-        # compatibilità con la UI precedente
-        "tier": chat_tier,
+        "tier": chat_tier,  # compatibilità con la UI precedente
         "model": chat_model,
         "chat": {"tier": chat_tier, "model": chat_model},
         "vision": {"tier": vision_tier, "model": vision_model},
+        "live_describe_seconds": settings.live_describe_seconds if settings.live_describe_enabled else 0,
         "cloud_configured": settings.has_cloud(),
         "ollama_reachable": ollama_reachable(),
     }
@@ -93,7 +129,6 @@ def diag() -> dict:
 
     out: dict = {"ok": True}
 
-    # Ollama: raggiungibile? quali modelli sono scaricati?
     ollama = {"reachable": ollama_reachable(), "models": [], "missing": []}
     if ollama["reachable"]:
         try:
@@ -107,7 +142,6 @@ def diag() -> dict:
             ollama["missing"].append(f"ollama pull {wanted}")
     out["ollama"] = ollama
 
-    # OpenRouter: la chiave funziona davvero?
     if settings.has_cloud():
         try:
             r = httpx.get(
@@ -121,25 +155,39 @@ def diag() -> dict:
     else:
         out["openrouter"] = "non configurato (OPENROUTER_API_KEY vuota)"
 
+    out["vista_live"] = (
+        f"descrizione scena ogni {settings.live_describe_seconds}s"
+        if settings.live_describe_enabled and settings.live_describe_seconds > 0
+        else "descrizione automatica disattivata"
+    )
     out["calendario_caldav"] = "configurato" if settings.caldav_configured() else "non configurato"
     out["email"] = "configurata" if settings.email_configured() else "non configurata"
     out["matrix"] = matrix_status() if not bridge.available() else "configurato"
     out["nota"] = (
         "Camera, riconoscimento oggetti/volti e microfono girano NEL BROWSER: "
-        "controllali dalla pagina della chat (permessi browser + macOS), non da qui."
+        "controllali dalla pagina della chat (permessi browser + macOS), non da qui. "
+        "Cosa vede la camera adesso: /vision"
     )
     return out
 
 
 @app.post("/frame")
 def frame(body: FrameIn) -> dict:
-    """Feed live: la UI invia in continuo frame, oggetti e volti riconosciuti."""
-    set_frame(body.session, body.frame, body.objects)
-    if body.faces is not None:
-        set_faces(body.session, body.faces)
-        for name in presence.update(body.faces):
-            notifications.push(f"👤 Ho riconosciuto {name} davanti alla camera.", "presence")
-    return {"ok": True}
+    """Feed live: la UI invia in continuo frame, rilevazioni e volti."""
+    _apply_frame(body.session, body.frame, body.objects, body.detections, body.faces)
+    scene = state.get_scene(body.session)
+    return {
+        "ok": True,
+        "scene": scene[0] if scene else None,
+        "scene_age": round(scene[1]) if scene else None,
+        "scene_error": state.get_scene_error(body.session),
+    }
+
+
+@app.get("/vision")
+def vision(session: str = "default") -> dict:
+    """Tutto ciò che la camera sa adesso, in JSON (per la UI e per altri agenti)."""
+    return vision_info.json_report(session)
 
 
 @app.get("/notifications")
@@ -157,8 +205,8 @@ _MESI = ["gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno", "luglio",
 def build_context(session: str) -> str:
     """Sezione "Stato attuale" rigenerata a ogni turno per il system prompt.
 
-    Dà al modello, senza bisogno di tool-calling: data/ora correnti, stato della
-    camera (oggetti e persone in vista), agenda di oggi e contatori utili.
+    Dà al modello, senza bisogno di tool-calling: data/ora, tutta la vista live
+    (oggetti con posizione, persone, scena descritta, eventi), agenda e contatori.
     """
     from datetime import datetime
 
@@ -170,25 +218,7 @@ def build_context(session: str) -> str:
         f"- Data e ora correnti: {_GIORNI[now.weekday()]} {now.day} {_MESI[now.month - 1]} "
         f"{now.year}, {now:%H:%M}"
     ]
-
-    # camera / vista live
-    age = frame_age(session)
-    if age is None or age > 20:
-        lines.append("- Camera: spenta (nessuna vista disponibile)")
-    else:
-        parts: list[str] = []
-        objs = get_objects(session)
-        if objs:
-            counted = Counter(objs)
-            parts.append(
-                "oggetti in vista: "
-                + ", ".join(f"{k}×{v}" if v > 1 else k for k, v in counted.items())
-            )
-        faces = get_faces(session)
-        if faces:
-            parts.append("persone riconosciute: " + ", ".join(sorted(set(faces))))
-        stato = "; ".join(parts) if parts else "nessun oggetto riconosciuto al momento"
-        lines.append(f"- Camera: ATTIVA — {stato}")
+    lines += vision_info.report_lines(session)
 
     # agenda e contatori (best-effort: mai bloccare la chat per un errore qui)
     try:
@@ -217,16 +247,15 @@ def build_context(session: str) -> str:
 
 @app.post("/chat", response_model=ChatOut)
 def chat(body: ChatIn) -> ChatOut:
-    # aggiorna il frame live per questa sessione, così `look`/`current_view` lo usano
-    if body.frame is not None or body.objects is not None:
-        set_frame(body.session, body.frame, body.objects)
+    # aggiorna la vista live per questa sessione (frame, rilevazioni, volti)
+    _apply_frame(body.session, body.frame, body.objects, body.detections, body.faces)
 
     context = build_context(body.session)
 
     # foto allegata: diventa la vista corrente (per `look`) e viene descritta
     # subito, così anche i modelli senza tool-calling la "vedono"
     if body.image:
-        set_frame(body.session, body.image)
+        state.set_frame(body.session, body.image)
         try:
             from .llm import vision_describe
 

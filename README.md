@@ -43,8 +43,8 @@ cloud — tramite un'unica API OpenAI-compatibile.
   ```
 - **Chiave OpenRouter** (per il tier cloud, facoltativa): <https://openrouter.ai/keys>
 
-Serve almeno uno dei due tier. Con `DEFAULT_TIER=auto` usa il cloud se trova la
-chiave, altrimenti il locale.
+Serve almeno uno dei due tier. Con `DEFAULT_TIER=auto` la chat resta in locale
+quando Ollama è attivo e passa al cloud altrimenti; la vista preferisce il cloud.
 
 ## Avvio
 
@@ -85,12 +85,13 @@ Apri **http://127.0.0.1:8765** nel browser (sul Mac). Scrivi in italiano; premi
 
 La camera è un **feed live**, non una foto singola:
 
-1. Nel browser gira un rilevatore di oggetti in tempo reale (TensorFlow.js
-   coco-ssd): disegna i riquadri e tiene aggiornato l'elenco di cosa è in vista.
-2. Ogni ~1,2 s il browser invia al server il frame corrente e gli oggetti
-   rilevati (`POST /frame`). Il server tiene solo l'**ultimo** frame in memoria.
-3. L'agente ha due strumenti: `current_view` (cosa c'è adesso, istantaneo, senza
-   modello) e `look` (descrizione ricca del frame corrente tramite VLM).
+1. Nel browser girano un rilevatore di oggetti (MediaPipe EfficientDet) e il
+   riconoscimento dei volti registrati (face-api): disegnano i riquadri e tengono
+   aggiornato cosa/chi è in vista.
+2. Ogni ~1,2 s il browser invia al server frame, rilevazioni con posizione e
+   volti (`POST /frame`). Il server tiene solo l'**ultimo** frame in memoria.
+3. L'agente ha `current_view` (tutto ciò che la camera sa adesso, istantaneo),
+   `who_is_here` e `look` (domanda precisa al VLM sul frame corrente).
 
 **I modelli locali riescono a vedere le immagini?** Sì, ma solo quelli
 *multimodali* (llava, `llama3.2-vision`, qwen2-vl, moondream…). Per il tier
@@ -103,11 +104,22 @@ cloud (testo piccolo, dettagli): per questo `VISION_TIER` ti fa scegliere —
 immagini non lasciano mai il Mac. Senza UI, c'è un fallback lato server via
 OpenCV (`pip install opencv-python`).
 
-**Gli oggetti arrivano al modello anche senza strumenti.** A ogni messaggio, se la
-camera è attiva, il server accoda al turno un *contesto automatico della vista*
-(oggetti e persone riconosciuti adesso): così anche i modelli locali deboli nel
-tool-calling sanno cosa c'è davanti alla camera. `look` resta per le descrizioni
-ricche.
+**Vista live "vera": tutto arriva al modello, sempre.** Con la camera attiva il
+browser manda ogni ~1,2 s frame, **rilevazioni con posizione** (riquadri
+normalizzati) e volti. Il server tiene lo stato e, in background, un
+**descrittore** chiede al VLM di descrivere la scena ogni `LIVE_DESCRIBE_SECONDS`
+(default 20, prima se cambiano gli oggetti). A ogni turno lo "Stato attuale" del
+prompt contiene: oggetti in vista con posizione dal tuo punto di vista
+("persona (al centro, da vicino), tazza (in basso a destra)"), persone
+riconosciute, la scena descritta e gli **eventi recenti** (cosa è comparso o
+sparito, chi è stato riconosciuto). Lo strumento `current_view` restituisce lo
+stesso report; `look` fa una domanda precisa al VLM sul frame corrente. Tutto è
+disponibile anche in JSON su **`/vision`** (per la UI e per altri agenti).
+
+**Librerie di visione in locale.** `run.sh` scarica una volta (in `web/vendor/`,
+~60 MB, ignorato da git) MediaPipe, i modelli EfficientDet e face-api coi suoi
+modelli: la pagina li carica da `/vendor` e funziona **offline**; se mancano,
+ripiega sulla CDN. Riscaricali con `scripts/fetch_vendor.sh`.
 
 **Foto allegate.** Con 📎 (o incollando con ⌘V) alleghi una foto al messaggio:
 il server la analizza subito col VLM e inietta la descrizione nel contesto, e la

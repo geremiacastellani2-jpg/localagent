@@ -76,6 +76,11 @@ class Settings:
     matrix_password: str = field(default_factory=lambda: os.getenv("MATRIX_PASSWORD", ""))
     matrix_device_id: str = field(default_factory=lambda: os.getenv("MATRIX_DEVICE_ID", "MAGGIORDOMO"))
 
+    # --- Vista live: descrizione continua della scena col VLM ---
+    live_describe_enabled: bool = field(default_factory=lambda: _bool("LIVE_DESCRIBE_ENABLED", True))
+    # ogni quanti secondi ridescrivere la scena (0 = disattivo); prima se la scena cambia
+    live_describe_seconds: int = field(default_factory=lambda: int(os.getenv("LIVE_DESCRIBE_SECONDS", "20")))
+
     # --- Proattività (Fase 6) ---
     scheduler_enabled: bool = field(default_factory=lambda: _bool("SCHEDULER_ENABLED", True))
     scheduler_interval_seconds: int = field(default_factory=lambda: int(os.getenv("SCHEDULER_INTERVAL_SECONDS", "60")))
