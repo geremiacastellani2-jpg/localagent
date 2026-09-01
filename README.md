@@ -59,13 +59,25 @@ cp .env.example .env      # compila OPENROUTER_API_KEY e/o configura Ollama
 Apri **http://127.0.0.1:8765** nel browser (sul Mac). Scrivi in italiano; premi
 📷 per attivare la camera e poi 👁️ (o chiedi «cosa vedi?»).
 
+### Solo modelli gratuiti (predefinito)
+
+Con `FREE_ONLY=true` (default) il cloud usa **solo modelli a costo zero**: la rosa
+viene letta dal catalogo pubblico di OpenRouter (prezzo 0, output testo, con
+`tools` se possibile, con immagini per la vista), ordinata per affidabilità —
+`openrouter/free` (il router automatico di OpenRouter) è in cima per la chat, i
+Gemma 4 multimodali per la vista. I gratuiti sono **rate-limited**: al primo 429
+l'agente passa al prossimo della rosa, mette in riposo quello saturo per 90 s e,
+esaurita la rosa, ripiega sul locale. La rosa attuale la vedi in `/diag`
+(`modelli_cloud`). Il locale (Ollama) è sempre gratuito e resta la prima scelta
+per la chat.
+
 ### Configurare OpenRouter
 
-1. Crea una chiave su <https://openrouter.ai/keys> (serve un po' di credito).
+1. Crea una chiave su <https://openrouter.ai/keys> (serve anche per i gratuiti).
 2. Mettila nel file **`.env`** (non in `.env.example`):
    ```
    OPENROUTER_API_KEY=sk-or-v1-...
-   CLOUD_MODEL=anthropic/claude-3.5-sonnet
+   CLOUD_MODEL=auto            # oppure un id ":free" da mettere per primo
    ```
 3. Verifica: apri <http://127.0.0.1:8765/health>. Se vedi `"cloud_configured": true`,
    la chiave è letta. Nota: con Ollama attivo la **chat resta in locale** (è
@@ -76,10 +88,9 @@ Apri **http://127.0.0.1:8765** nel browser (sul Mac). Scrivi in italiano; premi
    ```bash
    curl https://openrouter.ai/api/v1/models -H "Authorization: Bearer $OPENROUTER_API_KEY" | head
    ```
-5. **Evita i modelli `:free`** come `CLOUD_MODEL`: girano su un pool condiviso e
-   vengono limitati di continuo (errore 429). Se succede, l'agente passa da solo
-   al tier locale per quel messaggio, ma per un uso serio scegli un modello a
-   pagamento (es. `anthropic/claude-3.5-sonnet`).
+5. I modelli `:free` sono limitati (429) ma la rotazione automatica li rende
+   usabili. Se un giorno vorrai un modello a pagamento: `FREE_ONLY=false` e
+   `CLOUD_MODEL=<id>`.
 
 ## Come funziona la vista (dal vivo)
 

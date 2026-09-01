@@ -6,6 +6,7 @@ espongono la stessa API. La cronologia è per-sessione, in memoria (utente singo
 
 from __future__ import annotations
 
+from . import llm
 from .db import init_db
 from .llm import router
 from .tools import build_registry
@@ -49,6 +50,7 @@ Hai a disposizione degli strumenti. Regole d'uso:
 """
 
 MAX_STEPS = 6
+MAX_ROTATIONS = 3  # candidati cloud gratuiti da provare per turno prima di cambiare tier
 MAX_HISTORY = 40  # messaggi conservati per sessione (oltre al system prompt)
 
 
@@ -90,39 +92,11 @@ class Agent:
         context = {"session": session}
 
         final_text = ""
-        use_tools = True
-        switched_tier = False
+        st = {"client": client, "model": model, "tier": used_tier, "use_tools": True,
+              "tried": {model}, "switched": False}
         for _ in range(MAX_STEPS):
-            try:
-                if use_tools:
-                    resp = client.chat.completions.create(
-                        model=model, messages=history, tools=tools, tool_choice="auto"
-                    )
-                else:
-                    resp = client.chat.completions.create(model=model, messages=history)
-            except Exception as exc:
-                low = str(exc).lower()
-                is_rate = (
-                    "429" in low or "rate limit" in low or "rate-limit" in low
-                    or "ratelimit" in low or "too many requests" in low
-                )
-                if use_tools and ("tool" in low or "function" in low):
-                    # modello senza tool-calling: riprova senza strumenti
-                    # (lo "Stato attuale" nel prompt compensa)
-                    use_tools = False
-                    resp = client.chat.completions.create(model=model, messages=history)
-                elif is_rate and not switched_tier:
-                    # rate limit (tipico dei modelli :free): passa all'altro tier
-                    other = "local" if used_tier == "cloud" else "cloud"
-                    try:
-                        client, model, used_tier = router.resolve("chat", override=other)
-                    except Exception:
-                        raise exc
-                    self.last_tier, self.last_model = used_tier, model
-                    switched_tier = True
-                    continue
-                else:
-                    raise
+            resp = self._complete(history, tools, st)
+            client, model = st["client"], st["model"]
             msg = resp.choices[0].message
             tool_calls = msg.tool_calls or []
 
@@ -154,6 +128,47 @@ class Agent:
 
         self._trim(session)
         return final_text or "(nessuna risposta)"
+
+    def _complete(self, history: list[dict], tools: list[dict], st: dict):
+        """Una chiamata al modello, con i ripieghi che NON contano come passi:
+        - modello senza tool-calling → riprova senza strumenti;
+        - 429 su un gratuito del cloud → prossimo della rosa (max MAX_ROTATIONS);
+        - rosa esaurita (o locale saturo) → cambia tier una volta.
+        """
+        for _attempt in range(MAX_ROTATIONS + 4):
+            try:
+                if st["use_tools"]:
+                    return st["client"].chat.completions.create(
+                        model=st["model"], messages=history, tools=tools, tool_choice="auto"
+                    )
+                return st["client"].chat.completions.create(model=st["model"], messages=history)
+            except Exception as exc:
+                low = str(exc).lower()
+                if st["use_tools"] and ("tool" in low or "function" in low):
+                    st["use_tools"] = False  # lo "Stato attuale" nel prompt compensa
+                    continue
+                if not llm.is_rate_limit_error(exc):
+                    raise
+                if st["tier"] == "cloud":
+                    llm.mark_rate_limited(st["model"])
+                    nxt = [c for c in llm.available_candidates(False) if c not in st["tried"]]
+                    if nxt and len(st["tried"]) < MAX_ROTATIONS:
+                        st["model"] = nxt[0]
+                        st["tried"].add(nxt[0])
+                        self.last_model = nxt[0]
+                        continue
+                if not st["switched"]:
+                    other = "local" if st["tier"] == "cloud" else "cloud"
+                    try:
+                        c, m, t = router.resolve("chat", override=other)
+                    except Exception:
+                        raise exc
+                    st.update(client=c, model=m, tier=t, switched=True)
+                    st["tried"].add(m)
+                    self.last_tier, self.last_model = t, m
+                    continue
+                raise
+        raise RuntimeError("troppi tentativi con i modelli disponibili")
 
     def _trim(self, session: str) -> None:
         history = self._histories.get(session)

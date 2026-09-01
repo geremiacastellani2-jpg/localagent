@@ -36,10 +36,12 @@ class Settings:
     openrouter_base_url: str = field(
         default_factory=lambda: os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
     )
-    cloud_model: str = field(default_factory=lambda: os.getenv("CLOUD_MODEL", "anthropic/claude-3.5-sonnet"))
-    cloud_vision_model: str = field(
-        default_factory=lambda: os.getenv("CLOUD_VISION_MODEL", "anthropic/claude-3.5-sonnet")
-    )
+    # "auto" = scegli dal catalogo (con FREE_ONLY: solo modelli gratuiti, in rosa
+    # con rotazione). Un id esplicito che finisce con ":free" viene messo per primo.
+    cloud_model: str = field(default_factory=lambda: os.getenv("CLOUD_MODEL", "auto"))
+    cloud_vision_model: str = field(default_factory=lambda: os.getenv("CLOUD_VISION_MODEL", "auto"))
+    # solo modelli a costo zero sul cloud (il locale è sempre gratuito)
+    free_only: bool = field(default_factory=lambda: _bool("FREE_ONLY", True))
 
     # --- Locale: Ollama (OpenAI-compatibile) ---
     ollama_base_url: str = field(default_factory=lambda: os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1"))

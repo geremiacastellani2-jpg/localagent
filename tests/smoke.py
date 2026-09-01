@@ -252,14 +252,17 @@ def _fake_resolve(task="chat", vision=False, override=None):
     return _Client(True), "fake-cloud", "cloud"
 
 
+import time as _t3  # noqa: E402
+_core.llm._MODELS_CACHE = (_t3.time(), [])  # catalogo vuoto → rosa statica, niente rete
 _old_resolve = _core.router.resolve
 _core.router.resolve = _fake_resolve
 try:
     _ag = _core.Agent()
     out = _ag.chat("rl", "ciao")
-    check("fallback 429 cloud→locale", out == "ok dal locale" and _ag.last_tier == "local")
+    check("fallback 429: rosa cloud esaurita → locale", out == "ok dal locale" and _ag.last_tier == "local")
 finally:
     _core.router.resolve = _old_resolve
+    _core.llm._COOLDOWN.clear(); _core.llm._MODELS_CACHE = None
 
 
 # vista live: rilevazioni con posizione, eventi, scena, report, descrittore
@@ -303,6 +306,71 @@ with TestClient(srv.app) as _c:
           and _st.get_detections("lv2")[0]["label"] == "laptop")
     check("contesto turno include posizioni e persone",
           "portatile (" in srv.build_context("lv2") and "Marco" in srv.build_context("lv2"))
+
+
+# solo modelli gratuiti: rosa dal catalogo (finto), rotazione sui 429, riposo
+import time as _t2  # noqa: E402
+from agent import llm as _llm2  # noqa: E402
+_fake_catalog = [
+    {"id": "openrouter/free", "pricing": {"prompt": "0", "completion": "0"}, "context_length": 200000,
+     "architecture": {"input_modalities": ["text", "image"], "output_modalities": ["text"]}, "supported_parameters": ["tools"]},
+    {"id": "google/gemma-4-31b-it:free", "pricing": {"prompt": "0", "completion": "0"}, "context_length": 262144,
+     "architecture": {"input_modalities": ["text", "image"], "output_modalities": ["text"]}, "supported_parameters": ["tools"]},
+    {"id": "acme/textonly:free", "pricing": {"prompt": "0", "completion": "0"}, "context_length": 32000,
+     "architecture": {"input_modalities": ["text"], "output_modalities": ["text"]}, "supported_parameters": []},
+    {"id": "google/lyria-3-pro-preview", "pricing": {"prompt": "0", "completion": "0"}, "context_length": 1000000,
+     "architecture": {"input_modalities": ["text", "image"], "output_modalities": ["audio"]}, "supported_parameters": []},
+    {"id": "nvidia/nemotron-3.5-content-safety:free", "pricing": {"prompt": "0", "completion": "0"}, "context_length": 128000,
+     "architecture": {"input_modalities": ["text"], "output_modalities": ["text"]}, "supported_parameters": []},
+    {"id": "anthropic/claude-3.5-sonnet", "pricing": {"prompt": "0.000003", "completion": "0.000015"}, "context_length": 200000,
+     "architecture": {"input_modalities": ["text", "image"], "output_modalities": ["text"]}, "supported_parameters": ["tools"]},
+]
+_llm2._MODELS_CACHE = (_t2.time(), _fake_catalog)
+_cfg2 = _llm2.settings
+_old = (_cfg2.free_only, _cfg2.cloud_model, _cfg2.cloud_vision_model, _cfg2.openrouter_api_key)
+_cfg2.free_only, _cfg2.cloud_model, _cfg2.cloud_vision_model, _cfg2.openrouter_api_key = True, "auto", "auto", "sk-test"
+try:
+    _chat = _llm2.free_pool(False); _vis = _llm2.free_pool(True)
+    check("rosa chat: openrouter/free per primo", _chat[0] == "openrouter/free")
+    check("rosa: esclusi audio e classificatori e a pagamento",
+          not any(x in _chat for x in ("google/lyria-3-pro-preview", "nvidia/nemotron-3.5-content-safety:free", "anthropic/claude-3.5-sonnet")))
+    check("rosa vista: solo modelli che vedono immagini", "acme/textonly:free" not in _vis and "google/gemma-4-31b-it:free" in _vis)
+    _cfg2.cloud_model = "google/gemma-4-31b-it:free"
+    check("modello :free indicato dall'utente va per primo", _llm2.free_pool(False)[0] == "google/gemma-4-31b-it:free")
+    _cfg2.cloud_model = "anthropic/claude-3.5-sonnet"
+    check("con FREE_ONLY un modello a pagamento viene ignorato", "anthropic/claude-3.5-sonnet" not in _llm2.cloud_candidates(False))
+    _cfg2.free_only = False
+    check("senza FREE_ONLY il modello configurato viene usato", _llm2.cloud_candidates(False) == ["anthropic/claude-3.5-sonnet"])
+    _cfg2.free_only = True; _cfg2.cloud_model = "auto"
+    _llm2.mark_rate_limited("openrouter/free", 60)
+    check("modello in riposo saltato", _llm2.available_candidates(False)[0] != "openrouter/free"
+          and "openrouter/free" in _llm2.cooled_down())
+    _llm2._COOLDOWN.clear()
+
+    # rotazione in chat: il primo gratuito risponde 429, il secondo risponde
+    _seen = []
+    class _RotCompletions:
+        def create(self, **kw):
+            _seen.append(kw["model"])
+            if kw["model"] == "openrouter/free":
+                raise RuntimeError("Error code: 429 - rate-limited upstream")
+            return _Resp()
+    class _RotClient:
+        chat = type("C", (), {"completions": _RotCompletions()})()
+    def _rot_resolve(task="chat", vision=False, override=None, model=None):
+        return _RotClient(), (model or _llm2.available_candidates(vision)[0]), "cloud"
+    _old_resolve2 = _core.router.resolve
+    _core.router.resolve = _rot_resolve
+    try:
+        _ag2 = _core.Agent()
+        _out2 = _ag2.chat("rot", "ciao")
+        check("429 → prossimo gratuito della rosa", _out2 == "ok dal locale" and _seen[0] == "openrouter/free"
+              and _seen[1] != "openrouter/free" and _ag2.last_model == _seen[1])
+    finally:
+        _core.router.resolve = _old_resolve2
+finally:
+    _cfg2.free_only, _cfg2.cloud_model, _cfg2.cloud_vision_model, _cfg2.openrouter_api_key = _old
+    _llm2._COOLDOWN.clear(); _llm2._MODELS_CACHE = None
 
 print("\nStrumenti:", ", ".join(sorted(names)))
 sys.exit(0 if ok else 1)

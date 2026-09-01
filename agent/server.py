@@ -101,18 +101,19 @@ def index() -> FileResponse:
 
 @app.get("/health")
 def health() -> dict:
-    from .llm import ollama_reachable, resolve_chat_tier, resolve_vision_tier
+    from .llm import available_candidates, ollama_reachable, resolve_chat_tier, resolve_vision_tier
 
     chat_tier = resolve_chat_tier()
     vision_tier = resolve_vision_tier()
-    chat_model = settings.cloud_model if chat_tier == "cloud" else settings.local_model
-    vision_model = settings.cloud_vision_model if vision_tier == "cloud" else settings.local_vision_model
+    chat_model = available_candidates(False)[0] if chat_tier == "cloud" else settings.local_model
+    vision_model = available_candidates(True)[0] if vision_tier == "cloud" else settings.local_vision_model
     return {
         "ok": True,
         "tier": chat_tier,  # compatibilità con la UI precedente
         "model": chat_model,
         "chat": {"tier": chat_tier, "model": chat_model},
         "vision": {"tier": vision_tier, "model": vision_model},
+        "free_only": settings.free_only,
         "live_describe_seconds": settings.live_describe_seconds if settings.live_describe_enabled else 0,
         "cloud_configured": settings.has_cloud(),
         "ollama_reachable": ollama_reachable(),
@@ -154,6 +155,14 @@ def diag() -> dict:
             out["openrouter"] = f"errore di rete: {exc}"
     else:
         out["openrouter"] = "non configurato (OPENROUTER_API_KEY vuota)"
+    from .llm import cloud_candidates, cooled_down
+
+    out["modelli_cloud"] = {
+        "solo_gratuiti": settings.free_only,
+        "chat": cloud_candidates(False)[:5],
+        "vista": cloud_candidates(True)[:5],
+        "in_riposo_per_429": cooled_down(),
+    }
 
     out["vista_live"] = (
         f"descrizione scena ogni {settings.live_describe_seconds}s"
