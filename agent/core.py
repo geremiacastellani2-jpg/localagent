@@ -12,7 +12,10 @@ from .tools import build_registry
 
 SYSTEM_PROMPT = """\
 Sei "Maggiordomo", un assistente personale che gira in locale sul Mac dell'utente.
-Rispondi sempre in italiano, in modo diretto e conciso.
+Scrivi sempre in ITALIANO corretto e naturale: frasi ben costruite, grammatica
+curata, niente calchi dall'inglese né parole inventate. Tono diretto e conciso,
+come un maggiordomo competente. Se non sei sicuro di una parola, usa una
+formulazione semplice.
 
 Hai a disposizione degli strumenti. Regole d'uso:
 - Per note, promemoria, calendario e memoria dei fatti, USA gli strumenti: non
@@ -85,13 +88,24 @@ class Agent:
         context = {"session": session}
 
         final_text = ""
+        use_tools = True
         for _ in range(MAX_STEPS):
-            resp = client.chat.completions.create(
-                model=model,
-                messages=history,
-                tools=tools,
-                tool_choice="auto",
-            )
+            try:
+                if use_tools:
+                    resp = client.chat.completions.create(
+                        model=model, messages=history, tools=tools, tool_choice="auto"
+                    )
+                else:
+                    resp = client.chat.completions.create(model=model, messages=history)
+            except Exception as exc:
+                # alcuni modelli locali non supportano il tool-calling: riprova
+                # senza strumenti (lo "Stato attuale" nel prompt compensa)
+                low = str(exc).lower()
+                if use_tools and ("tool" in low or "function" in low):
+                    use_tools = False
+                    resp = client.chat.completions.create(model=model, messages=history)
+                else:
+                    raise
             msg = resp.choices[0].message
             tool_calls = msg.tool_calls or []
 

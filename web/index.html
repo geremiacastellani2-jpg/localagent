@@ -78,6 +78,11 @@
     color:var(--ink);border-radius:7px;padding:.2rem .5rem;cursor:pointer;
   }
   .row{display:flex;gap:.5rem;align-items:flex-end;flex-wrap:wrap}
+  .attach{display:flex;align-items:center;gap:.6rem}
+  .attach img{height:56px;border-radius:8px;border:1px solid var(--border)}
+  .attach button{border:1px solid var(--border);background:var(--surface);color:var(--muted);
+    border-radius:8px;padding:.2rem .5rem;font-size:.75rem;cursor:pointer}
+  .attach .lbl{font-size:.8rem;color:var(--muted)}
   textarea{
     flex:1;resize:none;min-height:44px;max-height:160px;padding:.7rem .8rem;
     border:1px solid var(--border);border-radius:12px;background:var(--surface);color:var(--ink);
@@ -129,28 +134,41 @@
           <div id="liveObjs">avvio riconoscimento…</div>
           <div id="liveFaces"></div>
           <button class="enroll" id="enrollBtn">＋ registra volto</button>
+          <button class="enroll" id="forgetBtn" title="Cancella i volti registrati da questo browser">✕ dimentica volti</button>
         </div>
+      </div>
+      <div class="attach" id="attachBox" hidden>
+        <img id="attachImg" alt="foto allegata">
+        <span class="lbl">foto allegata al prossimo messaggio</span>
+        <button id="attachX" title="Rimuovi">✕ rimuovi</button>
       </div>
       <div class="row">
         <button class="icon" id="camBtn" title="Attiva/disattiva camera">📷</button>
         <button class="icon" id="micBtn" title="Parla" disabled>🎤</button>
         <button class="icon" id="ttsBtn" title="Risposte a voce">🔊</button>
         <button class="icon" id="calBtn" title="Agenda di oggi">📅</button>
-        <button class="icon" id="eyeBtn" title="Cosa vedi?" disabled>👁️</button>
+        <button class="icon" id="eyeBtn" title="Cosa vedi?">👁️</button>
+        <button class="icon" id="fileBtn" title="Allega una foto">📎</button>
         <textarea id="input" placeholder="Scrivi un messaggio…" rows="1"></textarea>
         <button class="send" id="send">Invia</button>
       </div>
     </div>
   </footer>
 
-<!-- face-api PRIMA di tfjs: ha il suo TensorFlow incorporato e i due runtime
-     non devono pestarsi i piedi (il tf globale per coco-ssd arriva dopo) -->
+<!-- Volti: face-api (col suo TF incorporato). Oggetti: MediaPipe EfficientDet
+     (runtime WASM separato, importato quando accendi la camera) — niente più
+     doppio runtime TensorFlow in conflitto. -->
 <script src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/dist/face-api.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
 <script>
 const SESSION = "default";
 const FACE_MODELS = "https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/model";
+const MP_BUNDLE = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/vision_bundle.mjs";
+const MP_WASM   = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/wasm";
+// EfficientDet-Lite2 (accurato) con ripiego su Lite0 (leggero)
+const DET_MODELS = [
+  "https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite2/float16/1/efficientdet_lite2.tflite",
+  "https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/float16/1/efficientdet_lite0.tflite",
+];
 const $ = id => document.getElementById(id);
 const thread=$("thread"), input=$("input"), sendBtn=$("send"), camBtn=$("camBtn"),
       eyeBtn=$("eyeBtn"), micBtn=$("micBtn"), ttsBtn=$("ttsBtn"), cam=$("cam"),
@@ -200,32 +218,45 @@ function redraw(){
   lastFaces.forEach(f=>{ const b=f.box; ctx.strokeRect(b.x,b.y,b.width,b.height); ctx.fillText(f.label,b.x+3,b.y>14?b.y-4:b.y+14); });
 }
 
-// ---------- rilevamento oggetti ----------
+// ---------- rilevamento oggetti (MediaPipe EfficientDet) ----------
 async function ensureDetector(){
   if(detector) return;
-  if(!window.cocoSsd){
-    liveObjsEl.textContent="librerie visione non caricate: serve internet, poi ricarica (⌘⇧R)";
-    return;
-  }
   try{
-    liveObjsEl.textContent="carico il modello…";
-    // base mobilenet_v2: più accurata della variante lite di default
-    detector=await cocoSsd.load({base:"mobilenet_v2"});
-  }catch{
-    try{ detector=await cocoSsd.load(); }  // fallback alla variante lite
-    catch{ liveObjsEl.textContent="modelli visione non scaricabili: controlla la connessione e ricarica"; }
+    liveObjsEl.textContent="carico il rilevatore…";
+    const mp=await import(MP_BUNDLE);
+    const files=await mp.FilesetResolver.forVisionTasks(MP_WASM);
+    let lastErr=null;
+    for(const model of DET_MODELS){
+      for(const delegate of ["GPU","CPU"]){
+        try{
+          detector=await mp.ObjectDetector.createFromOptions(files,{
+            baseOptions:{modelAssetPath:model,delegate},
+            runningMode:"VIDEO",scoreThreshold:0.35,maxResults:25});
+          liveObjsEl.textContent="rilevatore pronto";
+          return;
+        }catch(e){ lastErr=e; }
+      }
+    }
+    throw lastErr||new Error("nessuna variante caricabile");
+  }catch(e){
+    liveObjsEl.textContent="rilevatore non caricato: "+(((e&&e.message)||e)+"").slice(0,120);
   }
 }
 async function detectLoop(){
   if(!stream) return;
   if(detector&&video.videoWidth){
     try{
-      const preds=(await detector.detect(video,20,0.35)).filter(p=>p.score>0.4);
+      const res=detector.detectForVideo(video,performance.now());
+      const preds=(res.detections||[]).map(d=>({
+        bbox:[d.boundingBox.originX,d.boundingBox.originY,d.boundingBox.width,d.boundingBox.height],
+        class:(d.categories&&d.categories[0]&&d.categories[0].categoryName)||"?",
+        score:(d.categories&&d.categories[0]&&d.categories[0].score)||0
+      })).filter(p=>p.score>0.4);
       lastObjs=preds; liveObjects=preds.map(p=>p.class); redraw();
       const c={}; liveObjects.forEach(o=>c[o]=(c[o]||0)+1);
       const s=Object.entries(c).map(([k,v])=>v>1?`${k}×${v}`:k).join(", ");
-      liveObjsEl.textContent=s?("oggetti: "+s):"nessun oggetto";
-    }catch{}
+      liveObjsEl.textContent=s?("oggetti: "+s):"nessun oggetto in vista";
+    }catch(e){ /* frame fallito: si riprova al prossimo giro */ }
   }
   detectTimer=setTimeout(detectLoop,300);
 }
@@ -312,7 +343,7 @@ async function toggleCam(){
   if(stream){
     clearTimeout(detectTimer); clearTimeout(faceTimer); clearInterval(streamTimer);
     stream.getTracks().forEach(t=>t.stop()); stream=null;
-    cam.classList.remove("on"); camBtn.classList.remove("active"); eyeBtn.disabled=true;
+    cam.classList.remove("on"); camBtn.classList.remove("active");
     liveObjects=[]; liveFaces=[]; lastObjs=[]; lastFaces=[];
     fetch("/frame",{method:"POST",headers:{"Content-Type":"application/json"},
       body:JSON.stringify({session:SESSION,frame:null,objects:[],faces:[]})});
@@ -320,7 +351,7 @@ async function toggleCam(){
   }
   try{
     stream=await navigator.mediaDevices.getUserMedia({video:true});
-    video.srcObject=stream; cam.classList.add("on"); camBtn.classList.add("active"); eyeBtn.disabled=false;
+    video.srcObject=stream; cam.classList.add("on"); camBtn.classList.add("active");
     await ensureDetector(); detectLoop();
     ensureFace().then(()=>faceLoop());
     streamTimer=setInterval(pushFrame,1200);
@@ -375,17 +406,60 @@ async function pollNotifications(){
 }
 setInterval(pollNotifications,5000);
 
+// ---------- allegati foto ----------
+let attachedImage=null;
+const attachBox=$("attachBox"), attachImg=$("attachImg");
+const fileInput=document.createElement("input");
+fileInput.type="file"; fileInput.accept="image/*";
+function setAttachment(dataUrl){
+  attachedImage=dataUrl||null;
+  if(dataUrl){ attachImg.src=dataUrl; attachBox.hidden=false; }
+  else{ attachImg.src=""; attachBox.hidden=true; }
+}
+function imageFileToDataUrl(file,maxW=1024){
+  return new Promise(res=>{
+    const img=new Image();
+    img.onload=()=>{
+      const sc=Math.min(1,maxW/img.width);
+      const c=document.createElement("canvas");
+      c.width=Math.round(img.width*sc); c.height=Math.round(img.height*sc);
+      c.getContext("2d").drawImage(img,0,0,c.width,c.height);
+      URL.revokeObjectURL(img.src);
+      res(c.toDataURL("image/jpeg",0.85));
+    };
+    img.src=URL.createObjectURL(file);
+  });
+}
+fileInput.addEventListener("change",async()=>{
+  const f=fileInput.files&&fileInput.files[0];
+  if(f&&f.type.startsWith("image/")) setAttachment(await imageFileToDataUrl(f));
+  fileInput.value="";
+});
+$("fileBtn").addEventListener("click",()=>fileInput.click());
+$("attachX").addEventListener("click",()=>setAttachment(null));
+input.addEventListener("paste",async e=>{
+  for(const item of (e.clipboardData?.items||[])){
+    if(item.type.startsWith("image/")){
+      e.preventDefault();
+      setAttachment(await imageFileToDataUrl(item.getAsFile()));
+      return;
+    }
+  }
+});
+
 // ---------- invio ----------
 async function send(text){
   const message=(text??input.value).trim(); if(!message) return;
   const frame=captureFrame();
-  addMsg("user",message,frame);
+  const image=attachedImage;
+  addMsg("user",message,image||frame);
+  setAttachment(null);
   input.value=""; input.style.height="auto"; sendBtn.disabled=true;
   const thinking=addMsg("bot","sta pensando…"); thinking.classList.add("thinking");
   try{
     const tier=document.getElementById("tierSel").value;
     const r=await fetch("/chat",{method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({session:SESSION,message,frame,objects:liveObjects,
+      body:JSON.stringify({session:SESSION,message,frame,objects:liveObjects,image,
         tier:(tier==="auto"?null:tier)})});
     const j=await r.json();
     thinking.classList.remove("thinking"); thinking.textContent=j.reply||"(nessuna risposta)";
@@ -396,12 +470,24 @@ async function send(text){
 }
 
 sendBtn.addEventListener("click",()=>send());
-eyeBtn.addEventListener("click",()=>send("Cosa vedi in questo momento?"));
+eyeBtn.addEventListener("click",async()=>{
+  if(!stream){                    // accende la camera da solo, poi guarda
+    await toggleCam();
+    if(!stream) return;           // permesso negato: l'errore è già in chat
+    await new Promise(r=>setTimeout(r,900));
+  }
+  send("Cosa vedi in questo momento?");
+});
 $("calBtn").addEventListener("click",()=>send("Cosa ho in agenda oggi?"));
 camBtn.addEventListener("click",toggleCam);
 micBtn.addEventListener("click",toggleMic);
 ttsBtn.addEventListener("click",toggleTts);
 $("enrollBtn").addEventListener("click",enrollFace);
+$("forgetBtn").addEventListener("click",()=>{
+  const n=loadEnrolled().length;
+  saveEnrolled([]); faceMatcher=null;
+  addMsg("bot",n?`Dimenticati ${n} volti registrati.`:"Non c'erano volti registrati.");
+});
 input.addEventListener("keydown",e=>{ if(e.key==="Enter"&&!e.shiftKey){ e.preventDefault(); send(); }});
 input.addEventListener("input",()=>{ input.style.height="auto"; input.style.height=Math.min(160,input.scrollHeight)+"px"; });
 $("reset").addEventListener("click",async()=>{ await fetch("/reset?session="+SESSION,{method:"POST"}); thread.innerHTML=""; });

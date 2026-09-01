@@ -105,12 +105,19 @@ camera è attiva, il server accoda al turno un *contesto automatico della vista*
 tool-calling sanno cosa c'è davanti alla camera. `look` resta per le descrizioni
 ricche.
 
+**Foto allegate.** Con 📎 (o incollando con ⌘V) alleghi una foto al messaggio:
+il server la analizza subito col VLM e inietta la descrizione nel contesto, e la
+foto diventa la "vista corrente" per `look`. Il modello la vede sempre, anche se
+non chiama strumenti.
+
 **Limiti e qualità del rilevatore live.** Il riconoscimento in tempo reale usa
-coco-ssd (base `mobilenet_v2`): conosce le **80 classi COCO** (persone, tazze,
-laptop, bottiglie…) — non è a vocabolario aperto. Per "qualsiasi oggetto" la via
-giusta è `look` (il VLM riconosce ciò che vuoi). Se il tuo modello locale ignora
-gli strumenti, prova un modello con tool-calling migliore, ad es.
-`LOCAL_MODEL=gpt-oss:20b`, oppure usa il selettore **cloud** nella chat.
+MediaPipe **EfficientDet-Lite2** (ripiego Lite0), più accurato di coco-ssd, con
+runtime WASM separato (nessun conflitto col riconoscimento volti). Conosce le
+**80 classi COCO** — non è a vocabolario aperto: per "qualsiasi oggetto" la via
+giusta è `look` (il VLM). Se il tuo modello locale ignora gli strumenti o scrive
+in un italiano povero, prova `LOCAL_MODEL=gemma4` (italiano migliore) o
+`gpt-oss:20b` (tool-calling migliore), oppure il selettore **cloud** nella chat;
+se un modello non supporta i tools, l'agente riprova da solo senza strumenti.
 
 ## Come funziona la memoria
 

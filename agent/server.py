@@ -41,6 +41,7 @@ class ChatIn(BaseModel):
     message: str
     frame: str | None = None  # data URL JPEG dalla webcam (facoltativo)
     objects: list[str] | None = None  # oggetti live rilevati nel browser
+    image: str | None = None  # foto ALLEGATA dall'utente al messaggio (data URL)
     tier: str | None = None  # override per-messaggio: "local" | "cloud"
 
 
@@ -219,11 +220,27 @@ def chat(body: ChatIn) -> ChatOut:
     # aggiorna il frame live per questa sessione, così `look`/`current_view` lo usano
     if body.frame is not None or body.objects is not None:
         set_frame(body.session, body.frame, body.objects)
+
+    context = build_context(body.session)
+
+    # foto allegata: diventa la vista corrente (per `look`) e viene descritta
+    # subito, così anche i modelli senza tool-calling la "vedono"
+    if body.image:
+        set_frame(body.session, body.image)
+        try:
+            from .llm import vision_describe
+
+            desc = vision_describe(
+                body.image,
+                "Descrivi questa immagine in italiano: scena, oggetti, persone, eventuale testo leggibile.",
+            )
+            context += f"\n- FOTO ALLEGATA dall'utente a questo messaggio — contenuto: {desc}"
+        except Exception as exc:  # noqa: BLE001
+            context += f"\n- FOTO ALLEGATA dall'utente, ma l'analisi non è riuscita: {exc}"
+
     override = body.tier if body.tier in ("local", "cloud") else None
     try:
-        reply = agent.chat(
-            body.session, body.message, tier=override, context_block=build_context(body.session)
-        )
+        reply = agent.chat(body.session, body.message, tier=override, context_block=context)
     except Exception as exc:  # noqa: BLE001 — l'errore del modello deve arrivare leggibile in chat
         reply = (
             f"[errore modello] {exc}\n"

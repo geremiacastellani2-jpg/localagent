@@ -202,5 +202,16 @@ except Exception:
     pass  # nessun modello in CI: l'importante è lo stato della history
 check("system prompt aggiornato col contesto", "Data e ora correnti: test" in _a._history("t1")[0]["content"])
 
+# foto allegata al messaggio: diventa la vista corrente della sessione
+import os as _os
+_os.environ["SCHEDULER_ENABLED"] = "false"
+from fastapi.testclient import TestClient  # noqa: E402
+from agent.state import get_frame as _gf  # noqa: E402
+
+with TestClient(srv.app) as _c:
+    _c.post("/chat", json={"session": "img", "message": "guarda questa foto",
+                           "image": "data:image/jpeg;base64,AAAA"})
+check("foto allegata diventa la vista", _gf("img") == "data:image/jpeg;base64,AAAA")
+
 print("\nStrumenti:", ", ".join(sorted(names)))
 sys.exit(0 if ok else 1)
