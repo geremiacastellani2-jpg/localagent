@@ -89,6 +89,7 @@ class Agent:
 
         final_text = ""
         use_tools = True
+        switched_tier = False
         for _ in range(MAX_STEPS):
             try:
                 if use_tools:
@@ -98,12 +99,26 @@ class Agent:
                 else:
                     resp = client.chat.completions.create(model=model, messages=history)
             except Exception as exc:
-                # alcuni modelli locali non supportano il tool-calling: riprova
-                # senza strumenti (lo "Stato attuale" nel prompt compensa)
                 low = str(exc).lower()
+                is_rate = (
+                    "429" in low or "rate limit" in low or "rate-limit" in low
+                    or "ratelimit" in low or "too many requests" in low
+                )
                 if use_tools and ("tool" in low or "function" in low):
+                    # modello senza tool-calling: riprova senza strumenti
+                    # (lo "Stato attuale" nel prompt compensa)
                     use_tools = False
                     resp = client.chat.completions.create(model=model, messages=history)
+                elif is_rate and not switched_tier:
+                    # rate limit (tipico dei modelli :free): passa all'altro tier
+                    other = "local" if used_tier == "cloud" else "cloud"
+                    try:
+                        client, model, used_tier = router.resolve("chat", override=other)
+                    except Exception:
+                        raise exc
+                    self.last_tier, self.last_model = used_tier, model
+                    switched_tier = True
+                    continue
                 else:
                     raise
             msg = resp.choices[0].message

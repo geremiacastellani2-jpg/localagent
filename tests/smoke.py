@@ -213,5 +213,51 @@ with TestClient(srv.app) as _c:
                            "image": "data:image/jpeg;base64,AAAA"})
 check("foto allegata diventa la vista", _gf("img") == "data:image/jpeg;base64,AAAA")
 
+# fallback automatico su 429: il cloud è rate-limited, si passa al locale
+from agent import core as _core  # noqa: E402
+
+
+class _Msg:
+    content = "ok dal locale"
+    tool_calls = None
+
+
+class _Resp:
+    class _Choice:
+        message = _Msg()
+
+    choices = [_Choice()]
+
+
+class _Completions:
+    def __init__(self, fail):
+        self.fail = fail
+
+    def create(self, **_kw):
+        if self.fail:
+            raise RuntimeError("Error code: 429 - rate-limited upstream")
+        return _Resp()
+
+
+class _Client:
+    def __init__(self, fail):
+        self.chat = type("C", (), {"completions": _Completions(fail)})()
+
+
+def _fake_resolve(task="chat", vision=False, override=None):
+    if override == "local":
+        return _Client(False), "fake-local", "local"
+    return _Client(True), "fake-cloud", "cloud"
+
+
+_old_resolve = _core.router.resolve
+_core.router.resolve = _fake_resolve
+try:
+    _ag = _core.Agent()
+    out = _ag.chat("rl", "ciao")
+    check("fallback 429 cloud→locale", out == "ok dal locale" and _ag.last_tier == "local")
+finally:
+    _core.router.resolve = _old_resolve
+
 print("\nStrumenti:", ", ".join(sorted(names)))
 sys.exit(0 if ok else 1)

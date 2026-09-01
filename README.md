@@ -76,6 +76,10 @@ Apri **http://127.0.0.1:8765** nel browser (sul Mac). Scrivi in italiano; premi
    ```bash
    curl https://openrouter.ai/api/v1/models -H "Authorization: Bearer $OPENROUTER_API_KEY" | head
    ```
+5. **Evita i modelli `:free`** come `CLOUD_MODEL`: girano su un pool condiviso e
+   vengono limitati di continuo (errore 429). Se succede, l'agente passa da solo
+   al tier locale per quel messaggio, ma per un uso serio scegli un modello a
+   pagamento (es. `anthropic/claude-3.5-sonnet`).
 
 ## Come funziona la vista (dal vivo)
 
